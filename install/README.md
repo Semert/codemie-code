@@ -138,7 +138,7 @@ The log persists across runs.
 
 `install/macos/CodeMie Connect_2.1.0_aarch64.dmg` is CodeMie Connect, a signed macOS desktop app for **Apple Silicon (aarch64)** Macs. It bundles Node.js, npm and the CodeMie CLI, so nothing needs to be installed first. (An Intel x86_64 build is not shipped.)
 
-CodeMie Connect is built from a separate repository (`codemie-claude-installer-macos`, https://gitbud.epam.com/epm-cdme/codemie-claude-installer-macos); the `.dmg` committed here is the distributed artifact.
+CodeMie Connect is built from a separate repository (`codemie-claude-installer-macos`); the `.dmg` committed here is the distributed artifact.
 
 ### Running CodeMie Connect
 
