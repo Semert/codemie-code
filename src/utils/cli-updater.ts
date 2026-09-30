@@ -8,6 +8,8 @@
  * - CODEMIE_AUTO_UPDATE=true (default): Silently update without prompting
  * - CODEMIE_AUTO_UPDATE=false: Prompt user before updating
  * - CODEMIE_UPDATE_CHECK_INTERVAL: Time between update checks in ms (default: 86400000 = 24h)
+ *
+ * CodeMie Connect installs (codemie-connect.json marker next to package.json) never self-update.
  */
 
 import fs from 'fs/promises';
@@ -52,6 +54,21 @@ export async function getCurrentCliVersion(): Promise<string | null> {
   } catch (error) {
     logger.debug('Failed to read current CLI version:', error);
     return null;
+  }
+}
+
+/**
+ * Detect a CLI bundled in CodeMie Connect: a codemie-connect.json marker sits
+ * next to the package's package.json. Such installs are updated by the Connect app.
+ */
+export async function isCodemieConnectInstall(): Promise<boolean> {
+  try {
+    const dirname = path.dirname(fileURLToPath(import.meta.url));
+    await fs.access(path.resolve(dirname, '../../codemie-connect.json'));
+    return true;
+  } catch (error) {
+    logger.debug('CodeMie Connect marker not found:', error);
+    return false;
   }
 }
 
@@ -326,6 +343,11 @@ export async function updateCli(latestVersion: string, silent = false): Promise<
  * Non-blocking: Failures are logged but don't block CLI startup
  */
 export async function checkAndPromptForUpdate(): Promise<void> {
+  // CodeMie Connect installs are updated by the Connect app, never by the CLI
+  if (await isCodemieConnectInstall()) {
+    return;
+  }
+
   try {
     // PERFORMANCE FIX: Rate limiting - only check once per interval (default: 24h)
     if (!(await shouldCheckForUpdate())) {
