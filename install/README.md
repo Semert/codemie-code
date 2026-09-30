@@ -148,7 +148,7 @@ Download `CodeMie Connect_2.1.0_aarch64.dmg` from the [macOS install folder](htt
 
 App output is written to `~/Library/Logs/CodeMie/codemie_wizard.log`. The log persists across runs.
 
-The app reads `install/macos/version.txt` in this repo to check for updates; this is independent of the `@codemieai/code` npm package version.
+The app reads `install/macos/manifest.json` (Windows: `install/windows/manifest.json`) in this repo to check for updates: the latest app version and the download link for each platform. This is independent of the `@codemieai/code` npm package version.
 
 ## Release Artifacts
 
