@@ -18,6 +18,7 @@ import {
   parseClaudeReleases,
   parseTeamIdentifier,
   parseVsCodeLatest,
+  resolveClaudeDesktopWindows,
   type ClientSpec,
 } from '../client-install.js';
 
@@ -57,6 +58,50 @@ describe('download sources', () => {
     expect(CLIENT_SPECS['codex-desktop'].teamId).toBe('2DC432GLL2');
     expect(CLIENT_SPECS['codex-desktop'].bundle).toBe('ChatGPT.app');
     for (const spec of Object.values(CLIENT_SPECS)) expect(spec.downloadPage).toMatch(/^https:\/\//);
+  });
+});
+
+describe('resolveClaudeDesktopWindows', () => {
+  it('picks the user-scope, non-MSIX installer URL and SHA-256 from the winget manifest', async () => {
+    const dirs = [{ name: '0.14.3' }, { name: '0.14.10' }, { name: '0.14.9' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: machine',
+      '    InstallerType: msix',
+      '    InstallerUrl: https://x/msix.msix',
+      '    InstallerSha256: aaa',
+      '  - Scope: user',
+      '    InstallerType: exe',
+      '    InstallerUrl: https://x/user.exe',
+      '    InstallerSha256: bbb',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      if (url.includes('0.14.10')) return new Response(yamlText);
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).resolves.toEqual({
+      url: 'https://x/user.exe',
+      sha256: 'bbb',
+    });
+  });
+
+  it('refuses when every installer is MSIX or machine-scope', async () => {
+    const dirs = [{ name: '0.14.3' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: machine',
+      '    InstallerType: msix',
+      '    InstallerUrl: https://x/msix.msix',
+      '    InstallerSha256: aaa',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      return new Response(yamlText);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('non-MSIX');
   });
 });
 

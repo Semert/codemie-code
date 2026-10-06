@@ -14,6 +14,7 @@ import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { CodeMieError } from '@/utils/errors.js';
 import { exec } from '@/utils/exec.js';
 import { logger } from '@/utils/logger.js';
@@ -36,7 +37,7 @@ export interface ClientSpec {
   bundle: string;
   /** Apple Developer ID team that must have signed the bundle. */
   teamId: string;
-  kind: 'zip' | 'dmg';
+  kind: 'zip' | 'dmg' | 'exe';
   /** Vendor page the user can download the app from themselves. */
   downloadPage: string;
   resolve: (fetchImpl: typeof fetch) => Promise<ClientDownload>;
@@ -51,8 +52,10 @@ export class ClientInstallError extends CodeMieError {
 }
 
 const VSCODE_LATEST = 'https://update.code.visualstudio.com/api/update/darwin-universal/stable/latest';
+const WINDOWS_VSCODE_LATEST = 'https://update.code.visualstudio.com/api/update/win32-x64-user/stable/latest';
 const CLAUDE_RELEASES = 'https://downloads.claude.ai/releases/darwin/universal/RELEASES.json';
 const CODEX_DMG = 'https://persistent.oaistatic.com/codex-app-prod/Codex.dmg';
+const WINGET_CLAUDE_DIR = 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/a/Anthropic/Claude';
 
 /** Bound on each helper process (unpack, mount, verify, copy). */
 const STEP_TIMEOUT_MS = 5 * 60_000;
@@ -101,16 +104,50 @@ export function parseClaudeReleases(json: unknown): string {
   return url;
 }
 
+/** Ascending numeric compare of dot-separated version strings (e.g. "0.14.9" < "0.14.10"). */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/**
+ * The current per-user, non-MSIX Claude Desktop installer for Windows, read
+ * from the community-maintained winget-pkgs manifest (Claude Desktop publishes
+ * no update feed of its own for Windows, unlike its macOS RELEASES.json).
+ */
+export async function resolveClaudeDesktopWindows(fetchImpl: typeof fetch): Promise<ClientDownload> {
+  const dirs = (await getJson(fetchImpl, WINGET_CLAUDE_DIR)) as Array<{ name: string }>;
+  const latest = dirs.map((d) => d.name).sort(compareVersions).at(-1);
+  if (!latest) throw new Error('No Anthropic.Claude version found in winget-pkgs');
+  const res = await fetchImpl(
+    `https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/a/Anthropic/Claude/${latest}/Anthropic.Claude.installer.yaml`,
+    { redirect: 'follow', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status} for Anthropic.Claude.installer.yaml`);
+  const manifest = parseYaml(await res.text()) as {
+    Installers: Array<{ Scope?: string; InstallerType?: string; InstallerUrl: string; InstallerSha256: string }>;
+  };
+  const picked = manifest.Installers.find((i) => i.Scope === 'user' && i.InstallerType !== 'msix');
+  if (!picked) throw new Error('No per-user, non-MSIX Claude Desktop installer in the manifest');
+  return { url: picked.InstallerUrl, sha256: picked.InstallerSha256 };
+}
+
 export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
   'vscode': {
     app: 'vscode',
     label: 'VS Code',
     bundle: 'Visual Studio Code.app',
     teamId: 'UBF8T346G9',
-    kind: 'zip',
+    kind: process.platform === 'win32' ? 'exe' : 'zip',
     downloadPage: 'https://code.visualstudio.com/download',
     resolve: async (fetchImpl) => {
-      const { url, sha256 } = parseVsCodeLatest(await getJson(fetchImpl, VSCODE_LATEST));
+      const feedUrl = process.platform === 'win32' ? WINDOWS_VSCODE_LATEST : VSCODE_LATEST;
+      const { url, sha256 } = parseVsCodeLatest(await getJson(fetchImpl, feedUrl));
       return { url, sha256, size: await headSize(fetchImpl, url) };
     },
   },
@@ -119,9 +156,13 @@ export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
     label: 'Claude Desktop',
     bundle: 'Claude.app',
     teamId: 'Q6L2SF6YDW',
-    kind: 'zip',
+    kind: process.platform === 'win32' ? 'exe' : 'zip',
     downloadPage: 'https://claude.com/download',
     resolve: async (fetchImpl) => {
+      if (process.platform === 'win32') {
+        const download = await resolveClaudeDesktopWindows(fetchImpl);
+        return { ...download, size: await headSize(fetchImpl, download.url) };
+      }
       const url = parseClaudeReleases(await getJson(fetchImpl, CLAUDE_RELEASES));
       return { url, size: await headSize(fetchImpl, url) };
     },
