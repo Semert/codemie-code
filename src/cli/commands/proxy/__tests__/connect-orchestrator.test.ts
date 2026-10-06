@@ -565,6 +565,28 @@ describe('runCodexDesktop', () => {
     }));
   });
 
+  it('hints at the Microsoft Store, not --install-client, on win32', async () => {
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    vi.doMock('../connectors/codex-desktop.js', () => codexDesktopMock({
+      findCodexDesktopApp: vi.fn().mockReturnValue(null),
+    }));
+
+    try {
+      const { runCodexDesktopForTest } = await import('../connect-orchestrator.js');
+      const result = await runCodexDesktopForTest(
+        { url: 'http://127.0.0.1:4001', gatewayKey: 'k' } as never,
+        {}
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain('Microsoft Store');
+      expect(result.error).not.toContain('--install-client');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: original, configurable: true });
+    }
+  });
+
   it('proceeds past a missing app when --force is set', async () => {
     vi.doMock('../connectors/codex-desktop.js', () => codexDesktopMock({
       findCodexDesktopApp: vi.fn().mockReturnValue(null),
