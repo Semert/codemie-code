@@ -179,6 +179,22 @@ describe('ensureClientsInstalled', () => {
     );
   });
 
+  it('runs bin\\code.cmd for the extension install on win32', async () => {
+    const { step, ci, exec } = await load();
+    setPlatform('win32');
+    vi.mocked(ci.findInstalledClient).mockReturnValue(null);
+    vi.mocked(ci.installClient).mockResolvedValue('C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code');
+    exec.mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+
+    await step.ensureClientsInstalled({ vscode: true, vscodeClaudeCode: true }, { yes: true });
+
+    expect(exec).toHaveBeenCalledWith(
+      'C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.cmd',
+      ['--install-extension', 'anthropic.claude-code'],
+      expect.objectContaining({ timeout: expect.any(Number) })
+    );
+  });
+
   it('does not install the extension for --vscode alone but still creates the Code dir', async () => {
     const { step, ci, exec, mkdir } = await load();
     vi.mocked(ci.findInstalledClient).mockReturnValue('/Applications/Visual Studio Code.app');

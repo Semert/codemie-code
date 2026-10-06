@@ -4,6 +4,7 @@
  * and prepares VS Code so its targets can be configured right away.
  */
 import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { ConfigurationError } from '@/utils/errors.js';
 import { exec } from '@/utils/exec.js';
 import { logger } from '@/utils/logger.js';
@@ -124,7 +125,11 @@ export async function ensureClientsInstalled(
   }
 
   if (targets.vscodeClaudeCode && vscodePath) {
-    const cli = `${vscodePath}/Contents/Resources/app/bin/code`;
+    // macOS ships a .app bundle (Contents/Resources/app/bin/code); Windows
+    // places the CLI shim directly under the install root instead.
+    const cli = process.platform === 'win32'
+      ? join(vscodePath, 'bin', 'code.cmd')
+      : `${vscodePath}/Contents/Resources/app/bin/code`;
     const result = await exec(cli, ['--install-extension', CLAUDE_CODE_EXTENSION], { timeout: EXTENSION_TIMEOUT_MS })
       .catch((e: unknown) => ({ code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) }));
     if (result.code !== 0) {
