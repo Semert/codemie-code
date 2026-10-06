@@ -109,7 +109,13 @@ export async function ensureClientsInstalled(
 
   const vscodePath = paths.get('vscode');
   if (vscodePath) {
-    await mkdir(getVsCodeProductDir(false), { recursive: true });
+    const codeDir = getVsCodeProductDir(false);
+    await mkdir(codeDir, { recursive: true }).catch((e: unknown) => {
+      throw new ClientInstallError(
+        `Couldn't create ${codeDir} (${e instanceof Error ? e.message : String(e)}).`,
+        CLIENT_SPECS.vscode.downloadPage
+      );
+    });
   }
 
   if (targets.vscodeClaudeCode && vscodePath) {

@@ -202,6 +202,18 @@ describe('ensureClientsInstalled', () => {
     expect(err.downloadPage).toBe(ci.CLIENT_SPECS.vscode.downloadPage);
   });
 
+  it('reports a Code folder it cannot create as a ClientInstallError', async () => {
+    const { step, ci, mkdir } = await load();
+    vi.mocked(ci.findInstalledClient).mockReturnValue('/Applications/Visual Studio Code.app');
+    mkdir.mockRejectedValueOnce(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }));
+
+    const err = await step.ensureClientsInstalled({ vscode: true }, {}).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ci.ClientInstallError);
+    expect(err.message).toContain('EACCES');
+    expect(err.downloadPage).toBe(ci.CLIENT_SPECS.vscode.downloadPage);
+  });
+
   it('reports an extension install that hangs as a ClientInstallError', async () => {
     const { step, ci, exec } = await load();
     vi.mocked(ci.findInstalledClient).mockReturnValue('/Applications/Visual Studio Code.app');

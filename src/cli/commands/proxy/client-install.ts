@@ -10,7 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createWriteStream, existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -269,13 +269,17 @@ export async function installClient(spec: ClientSpec, opts: InstallClientOptions
     throw fail(`${spec.label} is already installed at ${dest}.`);
   }
 
-  const work = opts.workDir ?? (await mkdtemp(join(tmpdir(), 'codemie-client-')));
-  await mkdir(work, { recursive: true });
-  const pkg = join(work, spec.kind === 'zip' ? 'download.zip' : 'download.dmg');
-  const mnt = join(work, 'mnt');
+  // The app is copied under a hidden name and renamed when complete, so a copy
+  // cut short (killed, timed out) never looks like an installed app.
+  const staging = join(destDir, `.${spec.bundle}.codemie-partial`);
+  let work = opts.workDir ?? '';
   let mounted = false;
-  let copying = false;
+  let mnt = '';
   try {
+    work = opts.workDir ?? (await mkdtemp(join(tmpdir(), 'codemie-client-')));
+    await mkdir(work, { recursive: true });
+    const pkg = join(work, spec.kind === 'zip' ? 'download.zip' : 'download.dmg');
+    mnt = join(work, 'mnt');
     let download = opts.download;
     try {
       download ??= await spec.resolve(fetchImpl);
@@ -319,12 +323,12 @@ export async function installClient(spec: ClientSpec, opts: InstallClientOptions
     } catch {
       throw fail(`macOS didn't allow creating ${destDir}. Your IT policy may block installing apps here.`);
     }
-    copying = true;
-    const cp = await run('/usr/bin/ditto', [src, dest]);
+    await rm(staging, { recursive: true, force: true });
+    const cp = await run('/usr/bin/ditto', [src, staging]);
     if (cp.code !== 0) {
       throw fail(`macOS didn't allow installing ${spec.label} into ${destDir}. Your IT policy may block it. (${cp.stderr})`);
     }
-    copying = false;
+    await rename(staging, dest);
     log('✓ Installed for your account');
     return dest;
   } catch (e) {
@@ -332,8 +336,8 @@ export async function installClient(spec: ClientSpec, opts: InstallClientOptions
     // A helper that timed out or could not start.
     throw fail(`Installing ${spec.label} failed: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
-    if (copying) await rm(dest, { recursive: true, force: true });
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined);
     if (mounted) await run('/usr/bin/hdiutil', ['detach', mnt, '-force']).catch(() => undefined);
-    await rm(work, { recursive: true, force: true }).catch(() => undefined);
+    if (work) await rm(work, { recursive: true, force: true }).catch(() => undefined);
   }
 }
