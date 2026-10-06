@@ -79,7 +79,7 @@ export interface ConnectOptions {
    * "user" (default) tracks all projects and resets the allowlist; "project" adds only the current project root to it.
    */
   scope?: "user" | "project";
-  /** Download and install missing client apps first (macOS only). */
+  /** Download and install missing client apps first (macOS and Windows; Codex/ChatGPT is Store-only on Windows). */
   installClient?: boolean;
   /** Skip the install confirmation prompt. */
   yes?: boolean;
@@ -296,7 +296,7 @@ const TARGET_LIST = [
   '  --vscode               VS Code Copilot Chat models (BYOK)',
   '  --vscode-claude-code   VS Code Claude Code extension',
   '  --codex-desktop        Codex desktop app (writes ~/.codex/config.toml)',
-  '  --install-client       Download and install the selected app first if missing (macOS)',
+  '  --install-client       Download and install the selected app first if missing (macOS and Windows; Codex/ChatGPT is Store-only on Windows)',
   '  --yes                  Skip the install confirmation (with --install-client)',
   `  --${CLAUDE_CODE_OTLP_AGENT_NAME}     Claude Code (analytics hooks + OTel settings)`,
   '',

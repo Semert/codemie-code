@@ -312,7 +312,7 @@ export function createProxyCommand(): Command {
     .option('--force', 'Stop any existing proxy and start a fresh one, even if it looks healthy')
     .option('--verbose', 'Show detailed connection info (URLs, config paths) for debugging')
     .option('--insiders', 'Target VS Code Insiders (applies to --vscode / --vscode-claude-code)')
-    .option('--install-client', 'Download and install the app if missing (macOS)')
+    .option('--install-client', 'Download and install the app if missing (macOS and Windows; Codex/ChatGPT is Store-only on Windows)')
     .option('-y, --yes', 'Skip the install confirmation')
     .option(`--${CLAUDE_CODE_OTLP_AGENT_NAME}`, 'Configure Claude Code analytics hooks and OTLP settings')
     .addOption(
