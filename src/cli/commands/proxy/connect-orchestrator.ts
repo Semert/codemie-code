@@ -38,6 +38,7 @@ import { fetchManagedMcpServers } from './connectors/managed-mcp-remote.js';
 import { writeVsCodeClaudeCodeConfig } from './connectors/vscode-claude-code.js';
 import { writeVsCodeLanguageModelsConfig } from './connectors/vscode.js';
 import { checkProxyHealth } from './health-check.js';
+import { ClientInstallError } from './client-install.js';
 import {
   discoverCodexModels,
   findCodexDesktopApp,
@@ -271,6 +272,9 @@ export function printProxyError(error: unknown, label: string): never {
 
   if (error instanceof ConfigurationError) {
     console.error(chalk.red(`✗ ${error.message}`));
+  } else if (error instanceof ClientInstallError) {
+    console.error(chalk.red(`✗ ${error.message}`));
+    console.error(`Download page: ${error.downloadPage}`);
   } else {
     console.error(formatErrorForUser(context, { showSystem: false }));
   }

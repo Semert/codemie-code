@@ -575,3 +575,29 @@ describe('runCodexDesktop', () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe('printProxyError — ClientInstallError', () => {
+  let console_: ReturnType<typeof spyConsole>;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    console_ = spyConsole();
+  });
+
+  afterEach(() => {
+    console_.restore();
+  });
+
+  it('prints the message, the download page, and exits 1', async () => {
+    const errSpy = vi.mocked(console.error);
+    const { ClientInstallError } = await import('../client-install.js');
+    const { printProxyError } = await import('../connect-orchestrator.js');
+
+    expect(() => printProxyError(new ClientInstallError('boom', 'https://x'), 'connect failed')).toThrow('process.exit:1');
+
+    const lines = errSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('✗ boom'))).toBe(true);
+    expect(lines).toContain('Download page: https://x');
+  });
+});
