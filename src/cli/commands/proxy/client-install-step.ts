@@ -25,6 +25,8 @@ export interface InstallClientOptions {
 }
 
 const CLAUDE_CODE_EXTENSION = 'anthropic.claude-code';
+/** Bound on the extension install (it downloads from the marketplace). */
+const EXTENSION_TIMEOUT_MS = 5 * 60_000;
 
 /** Throws ConfigurationError for unsupported platform / --insiders. Call before any network work. */
 export function assertInstallClientSupported(
@@ -112,7 +114,8 @@ export async function ensureClientsInstalled(
 
   if (targets.vscodeClaudeCode && vscodePath) {
     const cli = `${vscodePath}/Contents/Resources/app/bin/code`;
-    const result = await exec(cli, ['--install-extension', CLAUDE_CODE_EXTENSION]);
+    const result = await exec(cli, ['--install-extension', CLAUDE_CODE_EXTENSION], { timeout: EXTENSION_TIMEOUT_MS })
+      .catch((e: unknown) => ({ code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) }));
     if (result.code !== 0) {
       logger.debug('VS Code extension install failed', result.stderr);
       const firstLine = result.stderr.trim().split('\n')[0] ?? '';

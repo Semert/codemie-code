@@ -174,7 +174,8 @@ describe('ensureClientsInstalled', () => {
     expect(mkdir).toHaveBeenCalledWith('/home/u/Library/Application Support/Code', { recursive: true });
     expect(exec).toHaveBeenCalledWith(
       '/u/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
-      ['--install-extension', 'anthropic.claude-code']
+      ['--install-extension', 'anthropic.claude-code'],
+      expect.objectContaining({ timeout: expect.any(Number) })
     );
   });
 
@@ -198,6 +199,18 @@ describe('ensureClientsInstalled', () => {
     expect(err).toBeInstanceOf(ci.ClientInstallError);
     expect(err.message).toContain('Could not install the Claude Code extension in VS Code: bad thing');
     expect(err.message).not.toContain('more');
+    expect(err.downloadPage).toBe(ci.CLIENT_SPECS.vscode.downloadPage);
+  });
+
+  it('reports an extension install that hangs as a ClientInstallError', async () => {
+    const { step, ci, exec } = await load();
+    vi.mocked(ci.findInstalledClient).mockReturnValue('/Applications/Visual Studio Code.app');
+    exec.mockRejectedValue(new Error('Command timed out after 300000ms'));
+
+    const err = await step.ensureClientsInstalled({ vscodeClaudeCode: true }, {}).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ci.ClientInstallError);
+    expect(err.message).toContain('timed out');
     expect(err.downloadPage).toBe(ci.CLIENT_SPECS.vscode.downloadPage);
   });
 

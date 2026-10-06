@@ -14,9 +14,9 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeMieError } from '../../../utils/errors.js';
-import { exec } from '../../../utils/exec.js';
-import { logger } from '../../../utils/logger.js';
+import { CodeMieError } from '@/utils/errors.js';
+import { exec } from '@/utils/exec.js';
+import { logger } from '@/utils/logger.js';
 
 export type ClientApp = 'claude-desktop' | 'vscode' | 'codex-desktop';
 
@@ -58,16 +58,18 @@ const CODEX_DMG = 'https://persistent.oaistatic.com/codex-app-prod/Codex.dmg';
 const STEP_TIMEOUT_MS = 5 * 60_000;
 /** A download that delivers no bytes for this long is given up. */
 const STALL_TIMEOUT_MS = 60_000;
+/** Bound on the small feed and size requests. */
+const REQUEST_TIMEOUT_MS = 30_000;
 
 async function getJson(fetchImpl: typeof fetch, url: string): Promise<unknown> {
-  const res = await fetchImpl(url, { redirect: 'follow' });
+  const res = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return res.json();
 }
 
 async function headSize(fetchImpl: typeof fetch, url: string): Promise<number | undefined> {
   try {
-    const res = await fetchImpl(url, { method: 'HEAD', redirect: 'follow' });
+    const res = await fetchImpl(url, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     const len = Number(res.headers.get('content-length'));
     return res.ok && len > 0 ? len : undefined;
   } catch {
@@ -176,6 +178,13 @@ export async function downloadToFile(
     }, stallMs);
   };
   const out = createWriteStream(dest);
+  let writeError: Error | undefined;
+  out.on('error', (e) => {
+    // Disk full or no permission: stop the download and report it.
+    writeError = e;
+    ctrl.abort();
+    void reader?.cancel().catch(() => undefined);
+  });
   const hash = createHash('sha256');
   try {
     arm();
@@ -190,13 +199,17 @@ export async function downloadToFile(
       if (!out.write(value)) await once(out, 'drain');
     }
     if (stalled) throw new Error('the download stalled');
+    if (writeError) throw writeError;
   } catch (e) {
-    throw stalled ? new Error('the download stalled') : e;
+    throw writeError ?? (stalled ? new Error('the download stalled') : e);
   } finally {
     clearTimeout(timer);
-    out.end();
-    await once(out, 'close');
+    if (!out.destroyed) {
+      out.end();
+      await once(out, 'close').catch(() => undefined);
+    }
   }
+  if (writeError) throw writeError;
   if (sha256 && hash.digest('hex').toLowerCase() !== sha256.toLowerCase()) {
     throw new Error('checksum mismatch');
   }
@@ -269,9 +282,12 @@ export async function installClient(spec: ClientSpec, opts: InstallClientOptions
       await downloadToFile(download.url, pkg, download.sha256, fetchImpl);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
+      const code = (e as NodeJS.ErrnoException)?.code;
       throw fail(reason === 'checksum mismatch'
         ? `The ${spec.label} download didn't match its published checksum, so it was not installed.`
-        : `Couldn't download ${spec.label} (${reason}). Check your connection and try again.`);
+        : code === 'ENOSPC' || code === 'EACCES' || code === 'EPERM'
+          ? `Couldn't save the ${spec.label} download (${reason}). Free up disk space and try again.`
+          : `Couldn't download ${spec.label} (${reason}). Check your connection and try again.`);
     }
 
     let root = join(work, 'unpacked');
@@ -281,9 +297,9 @@ export async function installClient(spec: ClientSpec, opts: InstallClientOptions
       if (r.code !== 0) throw fail(`Couldn't unpack the ${spec.label} download: ${r.stderr}`);
     } else {
       await mkdir(mnt, { recursive: true });
+      mounted = true; // set before attach: a timed-out attach can still mount
       const r = await run('/usr/bin/hdiutil', ['attach', '-nobrowse', '-readonly', '-noautoopen', '-mountpoint', mnt, pkg]);
       if (r.code !== 0) throw fail(`Couldn't open the ${spec.label} disk image: ${r.stderr}`);
-      mounted = true;
       root = mnt;
     }
     const src = join(root, spec.bundle);
@@ -318,6 +334,6 @@ export async function installClient(spec: ClientSpec, opts: InstallClientOptions
   } finally {
     if (copying) await rm(dest, { recursive: true, force: true });
     if (mounted) await run('/usr/bin/hdiutil', ['detach', mnt, '-force']).catch(() => undefined);
-    await rm(work, { recursive: true, force: true });
+    await rm(work, { recursive: true, force: true }).catch(() => undefined);
   }
 }

@@ -100,6 +100,11 @@ describe('downloadToFile', () => {
       .rejects.toThrow('checksum mismatch');
   });
 
+  it('reports a download it cannot save instead of crashing', async () => {
+    const nowhere = join(ws.path, 'no-such-dir', 'f');
+    await expect(downloadToFile('https://x/f', nowhere, undefined, serving(bytes))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('gives up on a download that stops sending data', async () => {
     const stalled = (async (_url: string, init?: RequestInit) => {
       const body = new ReadableStream({
