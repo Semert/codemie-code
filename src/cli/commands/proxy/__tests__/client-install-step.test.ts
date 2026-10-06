@@ -270,9 +270,14 @@ describe('assertInstallClientSupported', () => {
     expect(() => step.assertInstallClientSupported({}, 'darwin')).not.toThrow();
   });
 
-  it.each(['win32', 'linux'] as const)('rejects %s', async (p) => {
+  it('rejects linux', async () => {
     const { step } = await load();
-    expect(() => step.assertInstallClientSupported({}, p)).toThrow('macOS');
+    expect(() => step.assertInstallClientSupported({}, 'linux')).toThrow('macOS');
+  });
+
+  it('accepts win32', async () => {
+    const { step } = await load();
+    expect(() => step.assertInstallClientSupported({}, 'win32')).not.toThrow();
   });
 
   it('rejects --insiders', async () => {

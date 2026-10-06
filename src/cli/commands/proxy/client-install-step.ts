@@ -33,8 +33,8 @@ export function assertInstallClientSupported(
   opts: InstallClientOptions,
   platform: NodeJS.Platform = process.platform
 ): void {
-  if (platform !== 'darwin') {
-    throw new ConfigurationError('--install-client is only supported on macOS.');
+  if (platform !== 'darwin' && platform !== 'win32') {
+    throw new ConfigurationError('--install-client is only supported on macOS and Windows.');
   }
   if (opts.insiders) {
     throw new ConfigurationError('--install-client does not support --insiders (VS Code Insiders is not installed by the CLI).');
