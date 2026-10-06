@@ -90,6 +90,11 @@ export async function ensureClientsInstalled(
       paths.set(app, found);
       continue;
     }
+    if (app === 'codex-desktop' && process.platform === 'win32') {
+      // The ChatGPT desktop app is Store-only on Windows: CodeMie never
+      // downloads or prompts for it there, unlike every other platform/app.
+      throw new ClientInstallError('ChatGPT must be installed from the Microsoft Store.', spec.downloadPage);
+    }
     if (!process.stdin.isTTY && !opts.yes) {
       throw new ConfigurationError(
         `${spec.label} is not installed. Re-run with --yes to install it without a prompt.`
