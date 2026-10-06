@@ -619,7 +619,7 @@ async function runCodexDesktop(
             '(macOS and Windows only). Re-run with --force to write the config anyway.'
           : 'Could not find the ChatGPT desktop app (which ships Codex). Looked in: ' +
             `${candidates.join(', ')}. ` +
-            'Install it, or re-run with --force to write the config anyway.'
+            'Install it (or re-run with --install-client on macOS), or re-run with --force to write the config anyway.'
       );
     }
 
