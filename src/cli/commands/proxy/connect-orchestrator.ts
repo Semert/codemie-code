@@ -39,6 +39,7 @@ import { writeVsCodeClaudeCodeConfig } from './connectors/vscode-claude-code.js'
 import { writeVsCodeLanguageModelsConfig } from './connectors/vscode.js';
 import { checkProxyHealth } from './health-check.js';
 import { ClientInstallError } from './client-install.js';
+import { assertInstallClientSupported, ensureClientsInstalled } from './client-install-step.js';
 import {
   discoverCodexModels,
   findCodexDesktopApp,
@@ -78,6 +79,10 @@ export interface ConnectOptions {
    * "user" (default) tracks all projects and resets the allowlist; "project" adds only the current project root to it.
    */
   scope?: "user" | "project";
+  /** Download and install missing client apps first (macOS only). */
+  installClient?: boolean;
+  /** Skip the install confirmation prompt. */
+  yes?: boolean;
 }
 
 /** Effective client type used by `daemonMatchesRequest`. */
@@ -291,11 +296,14 @@ const TARGET_LIST = [
   '  --vscode               VS Code Copilot Chat models (BYOK)',
   '  --vscode-claude-code   VS Code Claude Code extension',
   '  --codex-desktop        Codex desktop app (writes ~/.codex/config.toml)',
+  '  --install-client       Download and install the selected app first if missing (macOS)',
+  '  --yes                  Skip the install confirmation (with --install-client)',
   `  --${CLAUDE_CODE_OTLP_AGENT_NAME}     Claude Code (analytics hooks + OTel settings)`,
   '',
   'Examples:',
   '  codemie proxy connect --claude-desktop',
   '  codemie proxy connect --codex-desktop',
+  '  codemie proxy connect --claude-desktop --install-client --yes',
   '  codemie proxy connect --vscode --vscode-claude-code',
   '  codemie proxy connect --claude-desktop --vscode --insiders',
   `  codemie proxy connect --${CLAUDE_CODE_OTLP_AGENT_NAME}`,
@@ -721,6 +729,9 @@ export async function connectTargets(opts: ConnectOptions): Promise<void> {
   let state: DaemonState;
   let config: Awaited<ReturnType<typeof ConfigLoader.load>>;
   try {
+    if (opts.installClient) {
+      assertInstallClientSupported({ yes: opts.yes, insiders: opts.insiders });
+    }
     const resolved = await resolveSsoProxyConfig(opts.profile, label, commandExample);
     config = resolved.config;
     if (!config.baseUrl) {
@@ -748,6 +759,13 @@ export async function connectTargets(opts: ConnectOptions): Promise<void> {
       syncRegisteredSkills(profile, cwd),
       syncPluginSkills(),
     ]);
+
+    if (
+      opts.installClient &&
+      (await ensureClientsInstalled(targets, { yes: opts.yes, insiders: opts.insiders })) === 'cancelled'
+    ) {
+      return;
+    }
 
     const identity = deriveDaemonIdentity(targets);
     const requested: RequestedDaemonConfig = {
