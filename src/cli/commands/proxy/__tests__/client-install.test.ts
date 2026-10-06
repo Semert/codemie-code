@@ -114,15 +114,37 @@ describe('codesign output', () => {
 
 describe('findInstalledClient', () => {
   let ws: TempWorkspace;
+  const original = process.platform;
   beforeEach(() => { ws = new TempWorkspace('codemie-client-find-'); });
-  afterEach(() => ws.cleanup());
+  afterEach(() => {
+    ws.cleanup();
+    Object.defineProperty(process, 'platform', { value: original, configurable: true });
+  });
 
-  it('finds the bundle in any of the given folders, else null', () => {
+  it('finds the macOS bundle in any of the given folders, else null', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     const a = join(ws.path, 'a');
     const b = join(ws.path, 'b');
     mkdirSync(join(b, 'Claude.app'), { recursive: true });
     expect(findInstalledClient(CLIENT_SPECS['claude-desktop'], [a, b])).toBe(join(b, 'Claude.app'));
     expect(findInstalledClient(CLIENT_SPECS.vscode, [a, b])).toBeNull();
+  });
+
+  it('reports vscode installed when Code.exe exists under the given dir on win32', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const a = join(ws.path, 'a');
+    const b = join(ws.path, 'b', 'Programs', 'Microsoft VS Code');
+    mkdirSync(b, { recursive: true });
+    writeFileSync(join(b, 'Code.exe'), '');
+    expect(findInstalledClient(CLIENT_SPECS.vscode, [a, b])).toBe(join(b, 'Code.exe'));
+  });
+
+  it('reports claude desktop installed when claude.exe exists under the given dir on win32', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const dir = join(ws.path, 'AnthropicClaude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'claude.exe'), '');
+    expect(findInstalledClient(CLIENT_SPECS['claude-desktop'], [dir])).toBe(join(dir, 'claude.exe'));
   });
 });
 

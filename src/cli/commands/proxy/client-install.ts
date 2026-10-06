@@ -38,6 +38,8 @@ export interface ClientSpec {
   /** Apple Developer ID team that must have signed the bundle. */
   teamId: string;
   kind: 'zip' | 'dmg' | 'exe';
+  /** Executable name checked for on Windows, where apps are files, not .app bundles. */
+  winBundle?: string;
   /** Vendor page the user can download the app from themselves. */
   downloadPage: string;
   resolve: (fetchImpl: typeof fetch) => Promise<ClientDownload>;
@@ -144,6 +146,7 @@ export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
     bundle: 'Visual Studio Code.app',
     teamId: 'UBF8T346G9',
     kind: process.platform === 'win32' ? 'exe' : 'zip',
+    winBundle: 'Code.exe',
     downloadPage: 'https://code.visualstudio.com/download',
     resolve: async (fetchImpl) => {
       const feedUrl = process.platform === 'win32' ? WINDOWS_VSCODE_LATEST : VSCODE_LATEST;
@@ -157,6 +160,10 @@ export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
     bundle: 'Claude.app',
     teamId: 'Q6L2SF6YDW',
     kind: process.platform === 'win32' ? 'exe' : 'zip',
+    // Best-effort: the squirrel-style installer's own root-level launcher shim.
+    // Not yet confirmed against a real install (not installed on the machine
+    // this was written on); a one-line fix here if the real folder/exe differs.
+    winBundle: 'claude.exe',
     downloadPage: 'https://claude.com/download',
     resolve: async (fetchImpl) => {
       if (process.platform === 'win32') {
@@ -183,9 +190,35 @@ export function applicationDirs(home: string = homedir()): string[] {
   return ['/Applications', join(home, 'Applications')];
 }
 
+/**
+ * Windows candidate install dirs, per app: both the machine-wide and per-user
+ * locations the ticket's "per-user or machine-wide" wording covers, matching
+ * where each vendor's own installer places itself.
+ */
+export function windowsApplicationDirs(app: ClientApp, home: string = homedir()): string[] {
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
+  const programFilesX86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)';
+  const localAppData = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local');
+  if (app === 'vscode') {
+    return [
+      join(programFiles, 'Microsoft VS Code'),
+      join(programFilesX86, 'Microsoft VS Code'),
+      join(localAppData, 'Programs', 'Microsoft VS Code'),
+    ];
+  }
+  if (app === 'claude-desktop') {
+    return [join(localAppData, 'AnthropicClaude')];
+  }
+  return [];
+}
+
 /** Where the app is installed, or null. Same places CodeMie Connect checks. */
-export function findInstalledClient(spec: ClientSpec, dirs: string[] = applicationDirs()): string | null {
-  return dirs.map((d) => join(d, spec.bundle)).find((p) => existsSync(p)) ?? null;
+export function findInstalledClient(
+  spec: ClientSpec,
+  dirs: string[] = process.platform === 'win32' ? windowsApplicationDirs(spec.app) : applicationDirs()
+): string | null {
+  const bundle = process.platform === 'win32' ? (spec.winBundle ?? spec.bundle) : spec.bundle;
+  return dirs.map((d) => join(d, bundle)).find((p) => existsSync(p)) ?? null;
 }
 
 /** The `TeamIdentifier=` value from `codesign -dv` output. */
