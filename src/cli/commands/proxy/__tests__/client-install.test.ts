@@ -3,7 +3,7 @@
  * The install tests drive the real ditto / hdiutil / codesign, so they only run on macOS.
  * @group unit
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
@@ -321,14 +321,89 @@ describe.skipIf(!isMac)('installClient (macOS)', () => {
   });
 });
 
-describe('installClient off macOS', () => {
-  it('says it is macOS only', async () => {
+describe('installClient on unsupported platforms', () => {
+  it('rejects linux', async () => {
     const original = process.platform;
-    Object.defineProperty(process, 'platform', { value: 'win32' });
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
     try {
-      await expect(installClient(CLIENT_SPECS.vscode)).rejects.toThrow('only supported on macOS');
+      await expect(installClient(CLIENT_SPECS.vscode)).rejects.toThrow('macOS and Windows');
     } finally {
-      Object.defineProperty(process, 'platform', { value: original });
+      Object.defineProperty(process, 'platform', { value: original, configurable: true });
+    }
+  });
+});
+
+describe('installClient on win32', () => {
+  const original = process.platform;
+
+  beforeEach(() => {
+    vi.resetModules();
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../../../../utils/exec.js');
+    vi.resetModules();
+    Object.defineProperty(process, 'platform', { value: original, configurable: true });
+  });
+
+  function winSpec(overrides: Partial<ClientSpec> = {}): ClientSpec {
+    return {
+      app: 'claude-desktop',
+      label: 'Stand In',
+      bundle: 'Stand In.app',
+      winBundle: 'stand-in.exe',
+      teamId: 'not set',
+      kind: 'exe',
+      winSilentArgs: ['--silent'],
+      downloadPage: 'https://example.com/download',
+      resolve: async () => ({ url: 'https://example.com/pkg' }),
+      ...overrides,
+    };
+  }
+
+  it('runs the downloaded exe with its winSilentArgs and never calls ditto/hdiutil/codesign', async () => {
+    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      const path = await install(winSpec(), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      });
+
+      expect(path).toBe(join(dest, 'stand-in.exe'));
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenCalledWith(join(work, 'installer.exe'), ['--silent'], expect.anything());
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('runs no installer when the download fails its checksum, and leaves nothing behind', async () => {
+    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-bad-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      await expect(install(winSpec({ resolve: async () => ({ url: 'https://example.com/pkg', sha256: '00' }) }), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      })).rejects.toThrow('published checksum');
+
+      expect(run).not.toHaveBeenCalled();
+      expect(existsSync(join(dest, 'stand-in.exe'))).toBe(false);
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
     }
   });
 });

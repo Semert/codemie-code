@@ -40,6 +40,8 @@ export interface ClientSpec {
   kind: 'zip' | 'dmg' | 'exe';
   /** Executable name checked for on Windows, where apps are files, not .app bundles. */
   winBundle?: string;
+  /** Args that make the Windows installer run silently, per-user, with no UAC prompt. */
+  winSilentArgs?: string[];
   /** Vendor page the user can download the app from themselves. */
   downloadPage: string;
   resolve: (fetchImpl: typeof fetch) => Promise<ClientDownload>;
@@ -147,6 +149,7 @@ export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
     teamId: 'UBF8T346G9',
     kind: process.platform === 'win32' ? 'exe' : 'zip',
     winBundle: 'Code.exe',
+    winSilentArgs: ['/VERYSILENT', '/NORESTART', '/MERGETASKS=!runcode'],
     downloadPage: 'https://code.visualstudio.com/download',
     resolve: async (fetchImpl) => {
       const feedUrl = process.platform === 'win32' ? WINDOWS_VSCODE_LATEST : VSCODE_LATEST;
@@ -164,6 +167,7 @@ export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
     // Not yet confirmed against a real install (not installed on the machine
     // this was written on); a one-line fix here if the real folder/exe differs.
     winBundle: 'claude.exe',
+    winSilentArgs: ['--silent'],
     downloadPage: 'https://claude.com/download',
     resolve: async (fetchImpl) => {
       if (process.platform === 'win32') {
@@ -326,17 +330,76 @@ export interface InstallClientOptions {
 }
 
 /**
+ * Downloads, checks and silently runs the Windows installer for `spec`. The
+ * installer places the app itself (there is no bundle directory to stage and
+ * rename), so this skips the macOS unpack/verify/copy pipeline entirely: once
+ * the checksum has matched, the installer is run and its own per-user,
+ * no-UAC install location (Task 2's winBundle/windowsApplicationDirs
+ * constants) is returned.
+ */
+async function installClientWindows(
+  spec: ClientSpec,
+  opts: { fetchImpl: typeof fetch; log: (line: string) => void; workDir?: string; download?: ClientDownload; destDir?: string }
+): Promise<string> {
+  const fail = (msg: string) => new ClientInstallError(msg, spec.downloadPage);
+  const bundle = spec.winBundle ?? spec.bundle;
+  const destDir = opts.destDir ?? windowsApplicationDirs(spec.app).at(-1) ?? homedir();
+  const dest = join(destDir, bundle);
+  if (existsSync(dest)) {
+    throw fail(`${spec.label} is already installed at ${dest}.`);
+  }
+
+  let work = opts.workDir ?? '';
+  try {
+    work = opts.workDir ?? (await mkdtemp(join(tmpdir(), 'codemie-client-')));
+    await mkdir(work, { recursive: true });
+    const pkg = join(work, 'installer.exe');
+    let download = opts.download;
+    try {
+      download ??= await spec.resolve(opts.fetchImpl);
+      await downloadToFile(download.url, pkg, download.sha256, opts.fetchImpl);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      const code = (e as NodeJS.ErrnoException)?.code;
+      throw fail(reason === 'checksum mismatch'
+        ? `The ${spec.label} download didn't match its published checksum, so it was not installed.`
+        : code === 'ENOSPC' || code === 'EACCES' || code === 'EPERM'
+          ? `Couldn't save the ${spec.label} download (${reason}). Free up disk space and try again.`
+          : `Couldn't download ${spec.label} (${reason}). Check your connection and try again.`);
+    }
+    opts.log(`✓ Downloaded ${spec.label}`);
+
+    const r = await run(pkg, spec.winSilentArgs ?? []);
+    if (r.code !== 0) {
+      throw fail(`Installing ${spec.label} failed (exit ${r.code}): ${r.stderr || r.stdout}`);
+    }
+    opts.log('✓ Installed for your account');
+    return dest;
+  } catch (e) {
+    if (e instanceof ClientInstallError) throw e;
+    throw fail(`Installing ${spec.label} failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    if (work) await rm(work, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
  * Downloads, checks and installs `spec` into ~/Applications. Throws
  * ClientInstallError on any failure, after removing the download and any
  * partly copied app. Never touches an app that is already at the destination.
  */
 export async function installClient(spec: ClientSpec, opts: InstallClientOptions = {}): Promise<string> {
   const fail = (msg: string) => new ClientInstallError(msg, spec.downloadPage);
-  if (process.platform !== 'darwin') {
-    throw fail(`Installing ${spec.label} from the CLI is only supported on macOS for now.`);
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
+    throw fail(`Installing ${spec.label} from the CLI is only supported on macOS and Windows for now.`);
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
   const log = opts.log ?? ((line: string) => console.log(line));
+
+  if (process.platform === 'win32') {
+    return installClientWindows(spec, { fetchImpl, log, workDir: opts.workDir, download: opts.download, destDir: opts.destDir });
+  }
+
   const destDir = opts.destDir ?? join(homedir(), 'Applications');
   const dest = join(destDir, spec.bundle);
   if (existsSync(dest)) {
