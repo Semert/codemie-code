@@ -128,14 +128,18 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/** winget InstallerType values that are a directly runnable executable. */
+const RUNNABLE_INSTALLER_TYPES = new Set(['exe', 'burn', 'nullsoft', 'inno']);
+
 /**
- * The current per-user, non-MSIX Claude Desktop installer for Windows, read
- * from the community-maintained winget-pkgs manifest (Claude Desktop publishes
- * no update feed of its own for Windows, unlike its macOS RELEASES.json).
+ * The current per-user Claude Desktop installer for Windows, read from the
+ * community-maintained winget-pkgs manifest (Claude Desktop publishes no
+ * update feed of its own for Windows, unlike its macOS RELEASES.json).
  */
 export async function resolveClaudeDesktopWindows(fetchImpl: typeof fetch): Promise<ClientDownload> {
   const dirs = (await getJson(fetchImpl, WINGET_CLAUDE_DIR)) as Array<{ name: string }>;
-  const latest = dirs.map((d) => d.name).sort(compareVersions).at(-1);
+  const versionDir = /^\d+(\.\d+)*$/;
+  const latest = dirs.map((d) => d.name).filter((name) => versionDir.test(name)).sort(compareVersions).at(-1);
   if (!latest) throw new Error('No Anthropic.Claude version found in winget-pkgs');
   const res = await fetchImpl(
     `https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/a/Anthropic/Claude/${latest}/Anthropic.Claude.installer.yaml`,
@@ -145,8 +149,8 @@ export async function resolveClaudeDesktopWindows(fetchImpl: typeof fetch): Prom
   const manifest = parseYaml(await res.text()) as {
     Installers: Array<{ Scope?: string; InstallerType?: string; InstallerUrl: string; InstallerSha256: string }>;
   };
-  const picked = manifest.Installers.find((i) => i.Scope === 'user' && i.InstallerType !== 'msix');
-  if (!picked) throw new Error('No per-user, non-MSIX Claude Desktop installer in the manifest');
+  const picked = manifest.Installers.find((i) => i.Scope === 'user' && RUNNABLE_INSTALLER_TYPES.has(i.InstallerType ?? ''));
+  if (!picked) throw new Error(`No supported installer type (${[...RUNNABLE_INSTALLER_TYPES].join('/')}) found for a per-user Claude Desktop installer in the manifest`);
   return { url: picked.InstallerUrl, sha256: picked.InstallerSha256 };
 }
 

@@ -87,6 +87,27 @@ describe('resolveClaudeDesktopWindows', () => {
     });
   });
 
+  it('ignores non-version directory entries (e.g. a README) when picking the latest', async () => {
+    const dirs = [{ name: '0.14.3' }, { name: 'README.md' }, { name: '0.14.10' }, { name: '0.14.9' }, { name: '.validation' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: user',
+      '    InstallerType: exe',
+      '    InstallerUrl: https://x/user.exe',
+      '    InstallerSha256: bbb',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      if (url.includes('/0.14.10/')) return new Response(yamlText);
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).resolves.toEqual({
+      url: 'https://x/user.exe',
+      sha256: 'bbb',
+    });
+  });
+
   it('refuses when every installer is MSIX or machine-scope', async () => {
     const dirs = [{ name: '0.14.3' }];
     const yamlText = [
@@ -101,7 +122,24 @@ describe('resolveClaudeDesktopWindows', () => {
       return new Response(yamlText);
     }) as typeof fetch;
 
-    await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('non-MSIX');
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('No supported installer type');
+  });
+
+  it('refuses a user-scope installer whose type is not directly runnable (e.g. msi)', async () => {
+    const dirs = [{ name: '0.14.3' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: user',
+      '    InstallerType: msi',
+      '    InstallerUrl: https://x/user.msi',
+      '    InstallerSha256: aaa',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      return new Response(yamlText);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('No supported installer type');
   });
 });
 
