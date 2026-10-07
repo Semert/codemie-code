@@ -1,12 +1,21 @@
 /**
  * Installs a client app (Claude Desktop, VS Code, the ChatGPT app that ships
- * Codex) for the current macOS user, so `proxy connect` can then configure it.
+ * Codex) for the current user, so `proxy connect` can then configure it. Runs
+ * on macOS and Windows; on Windows only Claude Desktop and VS Code are
+ * installable from here (ChatGPT is Store-only there, see client-install-step.ts).
  *
- * Nothing is bundled: each app comes from its vendor when asked for. VS Code
- * publishes a SHA-256 per build and it is checked. Every bundle must also carry
- * an intact signature from the vendor's Developer ID team before it is copied,
- * since Claude Desktop and ChatGPT publish no checksum. Apps go into
+ * Nothing is bundled: each app comes from its vendor when asked for.
+ *
+ * On macOS, every downloaded bundle must carry an intact signature from the
+ * vendor's Developer ID team before it is copied (verifyBundle), and VS Code's
+ * published SHA-256 is also checked when the feed provides one. Apps go into
  * ~/Applications, so no administrator password is ever needed.
+ *
+ * On Windows there is no equivalent signature check: installers are verified
+ * by SHA-256 checksum only (VS Code's own feed for VS Code, the community
+ * winget-pkgs manifest for Claude Desktop), and the per-user installer is run
+ * silently into Program Files/LocalAppData, again with no administrator
+ * password needed.
  */
 import { createHash } from 'node:crypto';
 import { createWriteStream, existsSync } from 'node:fs';
