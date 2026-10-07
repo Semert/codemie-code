@@ -4,7 +4,7 @@
  * and prepares VS Code so its targets can be configured right away.
  */
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { ConfigurationError } from '@/utils/errors.js';
 import { exec } from '@/utils/exec.js';
 import { logger } from '@/utils/logger.js';
@@ -125,12 +125,18 @@ export async function ensureClientsInstalled(
   }
 
   if (targets.vscodeClaudeCode && vscodePath) {
-    // macOS ships a .app bundle (Contents/Resources/app/bin/code); Windows
-    // places the CLI shim directly under the install root instead.
+    // macOS ships a .app bundle (Contents/Resources/app/bin/code). On Windows,
+    // vscodePath is the full path to Code.exe itself, and the CLI shim lives
+    // under bin/ beside it, so the install root is its *parent* directory.
     const cli = process.platform === 'win32'
-      ? join(vscodePath, 'bin', 'code.cmd')
+      ? join(dirname(vscodePath), 'bin', 'code.cmd')
       : `${vscodePath}/Contents/Resources/app/bin/code`;
-    const result = await exec(cli, ['--install-extension', CLAUDE_CODE_EXTENSION], { timeout: EXTENSION_TIMEOUT_MS })
+    // code.cmd is a .cmd shim: Node's spawn() cannot exec it without a shell,
+    // the same gotcha src/utils/processes.ts already handles for npm.cmd/npx.cmd.
+    const result = await exec(cli, ['--install-extension', CLAUDE_CODE_EXTENSION], {
+      timeout: EXTENSION_TIMEOUT_MS,
+      shell: process.platform === 'win32',
+    })
       .catch((e: unknown) => ({ code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) }));
     if (result.code !== 0) {
       logger.debug('VS Code extension install failed', result.stderr);

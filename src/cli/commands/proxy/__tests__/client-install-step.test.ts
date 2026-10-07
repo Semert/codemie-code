@@ -175,15 +175,17 @@ describe('ensureClientsInstalled', () => {
     expect(exec).toHaveBeenCalledWith(
       '/u/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
       ['--install-extension', 'anthropic.claude-code'],
-      expect.objectContaining({ timeout: expect.any(Number) })
+      expect.objectContaining({ timeout: expect.any(Number), shell: false })
     );
   });
 
-  it('runs bin\\code.cmd for the extension install on win32', async () => {
+  it('runs bin\\code.cmd for the extension install on win32, derived from the Code.exe install root, with shell:true', async () => {
     const { step, ci, exec } = await load();
     setPlatform('win32');
     vi.mocked(ci.findInstalledClient).mockReturnValue(null);
-    vi.mocked(ci.installClient).mockResolvedValue('C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code');
+    // vscodePath is the full path to Code.exe itself (what findInstalledClient /
+    // installClient return on win32), not the install directory.
+    vi.mocked(ci.installClient).mockResolvedValue('C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe');
     exec.mockResolvedValue({ code: 0, stdout: '', stderr: '' });
 
     await step.ensureClientsInstalled({ vscode: true, vscodeClaudeCode: true }, { yes: true });
@@ -191,7 +193,7 @@ describe('ensureClientsInstalled', () => {
     expect(exec).toHaveBeenCalledWith(
       'C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.cmd',
       ['--install-extension', 'anthropic.claude-code'],
-      expect.objectContaining({ timeout: expect.any(Number) })
+      expect.objectContaining({ timeout: expect.any(Number), shell: true })
     );
   });
 
