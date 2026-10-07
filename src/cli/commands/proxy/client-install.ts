@@ -11,11 +11,12 @@
  * published SHA-256 is also checked when the feed provides one. Apps go into
  * ~/Applications, so no administrator password is ever needed.
  *
- * On Windows there is no equivalent signature check: installers are verified
- * by SHA-256 checksum only (VS Code's own feed for VS Code, the community
- * winget-pkgs manifest for Claude Desktop), and the per-user installer is run
- * silently into Program Files/LocalAppData, again with no administrator
- * password needed.
+ * On Windows, installers are checked by SHA-256 checksum (VS Code's own feed
+ * for VS Code, the community winget-pkgs manifest for Claude Desktop, which
+ * must always carry one) and by an Authenticode signature naming the vendor's
+ * publisher (verifyWindowsSignature, every spec installable on Windows must
+ * configure one). The per-user installer then runs silently into Program
+ * Files/LocalAppData, again with no administrator password needed.
  */
 import { createHash } from 'node:crypto';
 import { createWriteStream, existsSync } from 'node:fs';
@@ -51,6 +52,13 @@ export interface ClientSpec {
   winBundle?: string;
   /** Args that make the Windows installer run silently, per-user, with no UAC prompt. */
   winSilentArgs?: string[];
+  /**
+   * Substring of the Authenticode signer certificate Subject that a genuine
+   * Windows installer for this app must carry. Required for every spec
+   * actually installable on Windows (installClientWindows refuses to run an
+   * installer for a spec missing this).
+   */
+  winPublisher?: string;
   /** Vendor page the user can download the app from themselves. */
   downloadPage: string;
   resolve: (fetchImpl: typeof fetch) => Promise<ClientDownload>;
@@ -151,6 +159,10 @@ export async function resolveClaudeDesktopWindows(fetchImpl: typeof fetch): Prom
   };
   const picked = manifest.Installers.find((i) => i.Scope === 'user' && RUNNABLE_INSTALLER_TYPES.has(i.InstallerType ?? ''));
   if (!picked) throw new Error(`No supported installer type (${[...RUNNABLE_INSTALLER_TYPES].join('/')}) found for a per-user Claude Desktop installer in the manifest`);
+  // The checksum check downstream (downloadToFile) is a no-op when sha256 is
+  // falsy, so a manifest with a blank InstallerSha256 must fail here instead
+  // of silently installing an unverified download.
+  if (!picked.InstallerSha256) throw new Error('The picked Claude Desktop installer manifest entry has no InstallerSha256');
   return { url: picked.InstallerUrl, sha256: picked.InstallerSha256 };
 }
 
@@ -163,6 +175,7 @@ export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
     kind: process.platform === 'win32' ? 'exe' : 'zip',
     winBundle: 'Code.exe',
     winSilentArgs: ['/VERYSILENT', '/NORESTART', '/MERGETASKS=!runcode'],
+    winPublisher: 'Microsoft Corporation',
     downloadPage: 'https://code.visualstudio.com/download',
     resolve: async (fetchImpl) => {
       const feedUrl = process.platform === 'win32' ? WINDOWS_VSCODE_LATEST : VSCODE_LATEST;
@@ -181,6 +194,10 @@ export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
     // this was written on); a one-line fix here if the real folder/exe differs.
     winBundle: 'claude.exe',
     winSilentArgs: ['--silent'],
+    // Best-effort: Anthropic's actual Authenticode certificate Subject is not
+    // confirmed against a real signed installer; a one-line fix here if the
+    // real certificate names the publisher differently.
+    winPublisher: 'Anthropic, PBC',
     downloadPage: 'https://claude.com/download',
     resolve: async (fetchImpl) => {
       if (process.platform === 'win32') {
@@ -323,6 +340,36 @@ export async function verifyBundle(bundlePath: string, teamId: string): Promise<
   }
 }
 
+/** The `Status|Subject` line this module's PowerShell signature check prints. */
+export function parseAuthenticodeStatus(output: string): { status: string; subject: string } {
+  const [status = '', subject = ''] = output.trim().split('|');
+  return { status, subject };
+}
+
+/**
+ * Intact Authenticode signature naming `expectedPublisher` -- the Windows
+ * equivalent of verifyBundle's codesign/teamId check above. `filePath` is
+ * passed as a script argument rather than interpolated, so it needs no
+ * escaping even if it contains quotes.
+ */
+export async function verifyWindowsSignature(filePath: string, expectedPublisher: string): Promise<void> {
+  const r = await run('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    '$s = Get-AuthenticodeSignature -LiteralPath $args[0]; Write-Output "$($s.Status)|$($s.SignerCertificate.Subject)"',
+    filePath,
+  ]);
+  if (r.code !== 0) {
+    throw new Error(`signature check failed: ${r.stderr || r.stdout}`);
+  }
+  const { status, subject } = parseAuthenticodeStatus(r.stdout);
+  if (status !== 'Valid') {
+    throw new Error(`signature check failed: status ${status || 'unknown'}`);
+  }
+  if (!subject.includes(expectedPublisher)) {
+    throw new Error(`signed by "${subject || 'nobody'}", expected a certificate naming "${expectedPublisher}"`);
+  }
+}
+
 async function bundleVersion(bundlePath: string): Promise<string> {
   const r = await run('/usr/bin/plutil', [
     '-extract', 'CFBundleShortVersionString', 'raw', join(bundlePath, 'Contents', 'Info.plist'),
@@ -361,6 +408,13 @@ async function installClientWindows(
   if (existsSync(dest)) {
     throw fail(`${spec.label} is already installed at ${dest}.`);
   }
+  // Fail closed: an app spec with no configured publisher would otherwise run
+  // an unverified installer, since checksum verification alone is not enough
+  // (a manifest-sourced hash is no stronger a guarantee than its own feed).
+  const winPublisher = spec.winPublisher;
+  if (!winPublisher) {
+    throw fail(`No Windows publisher is configured to verify ${spec.label}'s signature.`);
+  }
 
   let work = opts.workDir ?? '';
   try {
@@ -381,6 +435,14 @@ async function installClientWindows(
           : `Couldn't download ${spec.label} (${reason}). Check your connection and try again.`);
     }
     opts.log(`✓ Downloaded ${spec.label}`);
+
+    try {
+      await verifyWindowsSignature(pkg, winPublisher);
+    } catch (e) {
+      logger.debug('[client-install] windows signature verify failed', { app: spec.app, error: String(e) });
+      throw fail(`The ${spec.label} download isn't signed by its vendor, so it was not installed.`);
+    }
+    opts.log('✓ Checked the download is genuine');
 
     const r = await run(pkg, spec.winSilentArgs ?? []);
     if (r.code !== 0) {

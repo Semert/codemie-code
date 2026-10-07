@@ -141,6 +141,23 @@ describe('resolveClaudeDesktopWindows', () => {
 
     await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('No supported installer type');
   });
+
+  it('refuses a picked installer with no InstallerSha256, rather than silently skipping the checksum', async () => {
+    const dirs = [{ name: '0.14.3' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: user',
+      '    InstallerType: exe',
+      '    InstallerUrl: https://x/user.exe',
+      '    InstallerSha256: ""',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      return new Response(yamlText);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('InstallerSha256');
+  });
 });
 
 describe('codesign output', () => {
@@ -391,6 +408,7 @@ describe('installClient on win32', () => {
       label: 'Stand In',
       bundle: 'Stand In.app',
       winBundle: 'stand-in.exe',
+      winPublisher: 'Stand In Inc',
       teamId: 'not set',
       kind: 'exe',
       winSilentArgs: ['--silent'],
@@ -400,8 +418,16 @@ describe('installClient on win32', () => {
     };
   }
 
-  it('runs the downloaded exe with its winSilentArgs and never calls ditto/hdiutil/codesign', async () => {
-    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+  /** A `run()` mock: a valid Authenticode signature from `publisher` for the powershell check, success for everything else (the installer run). */
+  function mockRun(publisher = 'Stand In Inc'): ReturnType<typeof vi.fn> {
+    return vi.fn().mockImplementation(async (cmd: string) => {
+      if (cmd === 'powershell.exe') return { code: 0, stdout: `Valid|CN=${publisher}`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    });
+  }
+
+  it('runs the downloaded exe with its winSilentArgs after verifying its Authenticode signature, and never calls ditto/hdiutil/codesign', async () => {
+    const run = mockRun();
     vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
     const { installClient: install } = await import('../client-install.js');
     const ws = new TempWorkspace('codemie-client-win-');
@@ -415,8 +441,9 @@ describe('installClient on win32', () => {
       });
 
       expect(path).toBe(join(dest, 'stand-in.exe'));
-      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenCalledWith(join(work, 'installer.exe'), ['--silent'], expect.anything());
+      expect(run.mock.calls.some(([cmd]) => cmd === 'powershell.exe')).toBe(true);
       expect(existsSync(work)).toBe(false);
     } finally {
       ws.cleanup();
@@ -424,7 +451,7 @@ describe('installClient on win32', () => {
   });
 
   it('runs no installer when the download fails its checksum, and leaves nothing behind', async () => {
-    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+    const run = mockRun();
     vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
     const { installClient: install } = await import('../client-install.js');
     const ws = new TempWorkspace('codemie-client-win-bad-');
@@ -439,6 +466,54 @@ describe('installClient on win32', () => {
 
       expect(run).not.toHaveBeenCalled();
       expect(existsSync(join(dest, 'stand-in.exe'))).toBe(false);
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('refuses an installer whose Authenticode signature is from the wrong publisher, and runs nothing', async () => {
+    const run = mockRun('Someone Else Inc');
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install, ClientInstallError } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-badsig-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      const err = await install(winSpec(), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ClientInstallError);
+      expect((err as Error).message).toContain("isn't signed by its vendor");
+      expect(run).not.toHaveBeenCalledWith(join(work, 'installer.exe'), ['--silent'], expect.anything());
+      expect(existsSync(join(dest, 'stand-in.exe'))).toBe(false);
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('refuses an installer with no valid Authenticode signature at all, and runs nothing', async () => {
+    const run = vi.fn().mockImplementation(async (cmd: string) => {
+      if (cmd === 'powershell.exe') return { code: 0, stdout: 'NotSigned|', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    });
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install, ClientInstallError } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-nosig-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      await expect(install(winSpec(), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      })).rejects.toBeInstanceOf(ClientInstallError);
+
+      expect(run).not.toHaveBeenCalledWith(join(work, 'installer.exe'), ['--silent'], expect.anything());
       expect(existsSync(work)).toBe(false);
     } finally {
       ws.cleanup();
