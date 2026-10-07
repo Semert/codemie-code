@@ -201,6 +201,27 @@ describe('findInstalledClient', () => {
     writeFileSync(join(dir, 'claude.exe'), '');
     expect(findInstalledClient(CLIENT_SPECS['claude-desktop'], [dir])).toBe(join(dir, 'claude.exe'));
   });
+
+  it('reports codex-desktop (ChatGPT) installed on win32 using the given candidate paths directly, not dir+bundle', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const chatgptDir = join(ws.path, 'Programs', 'ChatGPT');
+    mkdirSync(chatgptDir, { recursive: true });
+    // Candidates here are already the full install paths (no winBundle to join), matching
+    // what getCodexDesktopAppCandidates() returns -- unlike vscode/claude-desktop above.
+    expect(findInstalledClient(CLIENT_SPECS['codex-desktop'], [join(ws.path, 'no-such'), chatgptDir])).toBe(chatgptDir);
+  });
+
+  it('reports codex-desktop (ChatGPT) not installed on win32 when none of the candidates exist', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    expect(findInstalledClient(CLIENT_SPECS['codex-desktop'], [join(ws.path, 'no-such')])).toBeNull();
+  });
+
+  it('defaults codex-desktop win32 detection to getCodexDesktopAppCandidates(), not windowsApplicationDirs', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    // No explicit dirs: must fall through to the real default and find nothing
+    // rather than throwing or using windowsApplicationDirs's [] for this app.
+    expect(findInstalledClient(CLIENT_SPECS['codex-desktop'])).toBeNull();
+  });
 });
 
 describe('downloadToFile', () => {

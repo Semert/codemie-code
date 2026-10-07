@@ -28,6 +28,7 @@ import { parse as parseYaml } from 'yaml';
 import { CodeMieError } from '@/utils/errors.js';
 import { exec } from '@/utils/exec.js';
 import { logger } from '@/utils/logger.js';
+import { getCodexDesktopAppCandidates } from './connectors/codex-desktop.js';
 
 export type ClientApp = 'claude-desktop' | 'vscode' | 'codex-desktop';
 
@@ -228,6 +229,11 @@ export function applicationDirs(home: string = homedir()): string[] {
  * Windows candidate install dirs, per app: both the machine-wide and per-user
  * locations the ticket's "per-user or machine-wide" wording covers, matching
  * where each vendor's own installer places itself.
+ *
+ * Does not cover codex-desktop: ChatGPT is Store-only on Windows (see
+ * client-install-step.ts) and a Store install lives under WindowsApps, with
+ * no predictable per-user/machine folder this function's dir+bundle shape
+ * could return. findInstalledClient detects it separately, below.
  */
 export function windowsApplicationDirs(app: ClientApp, home: string = homedir()): string[] {
   const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
@@ -246,11 +252,22 @@ export function windowsApplicationDirs(app: ClientApp, home: string = homedir())
   return [];
 }
 
-/** Where the app is installed, or null. Same places CodeMie Connect checks. */
+/**
+ * Where the app is installed, or null. Same places CodeMie Connect checks:
+ * for codex-desktop on win32 this is literally the same candidates
+ * getCodexDesktopAppCandidates() (the Codex connector's own detection) uses,
+ * since those candidates are already full install paths, not dirs to join
+ * with a bundle name.
+ */
 export function findInstalledClient(
   spec: ClientSpec,
-  dirs: string[] = process.platform === 'win32' ? windowsApplicationDirs(spec.app) : applicationDirs()
+  dirs: string[] = process.platform === 'win32'
+    ? (spec.app === 'codex-desktop' ? getCodexDesktopAppCandidates() : windowsApplicationDirs(spec.app))
+    : applicationDirs()
 ): string | null {
+  if (process.platform === 'win32' && spec.app === 'codex-desktop') {
+    return dirs.find((p) => existsSync(p)) ?? null;
+  }
   const bundle = process.platform === 'win32' ? (spec.winBundle ?? spec.bundle) : spec.bundle;
   return dirs.map((d) => join(d, bundle)).find((p) => existsSync(p)) ?? null;
 }
