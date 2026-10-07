@@ -439,21 +439,30 @@ describe('installClient on win32', () => {
     };
   }
 
-  /** A `run()` mock: a valid Authenticode signature from `publisher` for the powershell check, success for everything else (the installer run). */
-  function mockRun(publisher = 'Stand In Inc'): ReturnType<typeof vi.fn> {
+  /**
+   * A `run()` mock: a valid Authenticode signature from `publisher` for the
+   * powershell check; for the installer run, `onInstall` can simulate the
+   * installer actually placing the app (a real installer run has side
+   * effects on disk; this mock has none unless told to).
+   */
+  function mockRun(publisher = 'Stand In Inc', onInstall?: () => void): ReturnType<typeof vi.fn> {
     return vi.fn().mockImplementation(async (cmd: string) => {
       if (cmd === 'powershell.exe') return { code: 0, stdout: `Valid|CN=${publisher}`, stderr: '' };
+      onInstall?.();
       return { code: 0, stdout: '', stderr: '' };
     });
   }
 
   it('runs the downloaded exe with its winSilentArgs after verifying its Authenticode signature, and never calls ditto/hdiutil/codesign', async () => {
-    const run = mockRun();
+    const ws = new TempWorkspace('codemie-client-win-');
+    const dest = join(ws.path, 'AnthropicClaude');
+    const run = mockRun('Stand In Inc', () => {
+      mkdirSync(dest, { recursive: true });
+      writeFileSync(join(dest, 'stand-in.exe'), '');
+    });
     vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
     const { installClient: install } = await import('../client-install.js');
-    const ws = new TempWorkspace('codemie-client-win-');
     try {
-      const dest = join(ws.path, 'AnthropicClaude');
       const work = join(ws.path, 'work');
       const bytes = new TextEncoder().encode('exe-bytes');
 
@@ -465,6 +474,30 @@ describe('installClient on win32', () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenCalledWith(join(work, 'installer.exe'), ['--silent'], expect.anything());
       expect(run.mock.calls.some(([cmd]) => cmd === 'powershell.exe')).toBe(true);
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('refuses an installer that exits 0 but never places the app at dest', async () => {
+    const run = mockRun(); // no onInstall: exits 0 but leaves dest absent, like a Squirrel-style installer that silently no-ops.
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install, ClientInstallError } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-missing-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      const err = await install(winSpec(), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ClientInstallError);
+      expect((err as Error).message).toContain('installer finished but');
+      expect((err as Error).message).toContain(join(dest, 'stand-in.exe'));
+      expect((err as Error).message).toContain('was not found');
       expect(existsSync(work)).toBe(false);
     } finally {
       ws.cleanup();

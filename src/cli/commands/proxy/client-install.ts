@@ -465,6 +465,12 @@ async function installClientWindows(
     if (r.code !== 0) {
       throw fail(`Installing ${spec.label} failed (exit ${r.code}): ${r.stderr || r.stdout}`);
     }
+    // The winBundle/windowsApplicationDirs mapping is best-effort; an exit 0
+    // alone does not prove the installer actually placed the app at `dest`
+    // (e.g. a Squirrel-style installer that silently no-ops), so check for it.
+    if (!existsSync(dest)) {
+      throw fail(`${spec.label} installer finished but ${dest} was not found.`);
+    }
     opts.log('✓ Installed for your account');
     return dest;
   } catch (e) {
