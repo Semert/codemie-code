@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "branch": "EPMCDME-15627_install-client-windows",
+  "head": "7f8641eff07cdb26c6ec863894ad451cbbd97e51",
+  "runner": "npm",
+  "started_at": "2026-10-07T12:34:20.197Z",
+  "completed_at": "2026-10-07T12:52:10.000Z",
+  "status": "BLOCKED",
+  "drift_detected": false,
+  "gates": [
+    {
+      "id": "license-check",
+      "source": "guide",
+      "status": "PASS",
+      "duration_ms": 5000,
+      "command": "npm run license-check",
+      "exit_code": 0
+    },
+    {
+      "id": "lint",
+      "source": "guide",
+      "status": "PASS",
+      "duration_ms": 29798,
+      "command": "npm run lint",
+      "exit_code": 0
+    },
+    {
+      "id": "typecheck",
+      "source": "guide",
+      "status": "PASS",
+      "duration_ms": 13641,
+      "command": "npm run typecheck",
+      "exit_code": 0
+    },
+    {
+      "id": "build",
+      "source": "guide",
+      "status": "PASS",
+      "duration_ms": 26194,
+      "command": "npm run build",
+      "exit_code": 0
+    },
+    {
+      "id": "unit",
+      "source": "guide",
+      "status": "FAIL",
+      "duration_ms": 106733,
+      "command": "npx vitest run --project unit",
+      "exit_code": 1,
+      "notes": "10/4808 tests failed, 0 in src/cli/commands/proxy/** (this branch's changed files). 9 failures (providers-core.test.ts, AgentCLI-model-source.test.ts) are ambient-env contamination: this QA run executes inside a nested codemie-claude agent session that exports real CODEMIE_MODEL/CODEMIE_CLAUDE_MODEL_PICKER_SETTINGS/CODEMIE_MODEL_SOURCE env vars, which the un-mocked parts of default-agent-hooks.ts pick up and override the tests' own process.env fixtures with a real '--settings <picker-config>.json' / '--model claude-sonnet-5[1m]' injection. Re-running the same 3 files with those CODEMIE_* vars unset drops failures from 10 to 1 (verified). The remaining failure (system-proxy-dispatcher.test.ts > routes global fetch through the explicit proxy) reproduces deterministically on this Windows host across 3 isolated reruns and is pre-existing/unrelated to the diff (file last touched by #571, not this branch). A clean CI runner (no ambient CODEMIE_* env) would not see the 9 contaminated failures; the system-proxy one should be verified on CI."
+    },
+    {
+      "id": "integration",
+      "source": "guide",
+      "status": "FAIL",
+      "duration_ms": 76036,
+      "command": "npx vitest run --project cli",
+      "exit_code": 1,
+      "notes": "4/288 tests failed, all in tests/integration/sso-claude-plugin.test.ts, none in files changed by this branch. Same ambient-env contamination as the unit gate (real CODEMIE_MODEL/CODEMIE_CLAUDE_MODEL_PICKER_SETTINGS leaking into enrichArgs assertions). Re-running this file alone with those CODEMIE_* vars unset: 14/14 pass (verified). Expected to pass on a clean CI runner."
+    },
+    {
+      "id": "affected-tests",
+      "source": "hook",
+      "status": "FAIL",
+      "duration_ms": 117465,
+      "command": "npx vitest related --run --exclude tests/integration/agent-*.test.ts --exclude tests/integration/cli-commands/models.test.ts src/cli/commands/proxy/client-install-step.ts src/cli/commands/proxy/client-install.ts src/cli/commands/proxy/connect-orchestrator.ts src/cli/commands/proxy/index.ts src/cli/commands/proxy/__tests__/client-install-step.test.ts src/cli/commands/proxy/__tests__/client-install.test.ts src/cli/commands/proxy/__tests__/connect-orchestrator.test.ts",
+      "exit_code": 1,
+      "notes": "Derived from .husky/pre-commit's lint-staged chain (eslint --max-warnings=0 --no-warn-ignored, then vitest related --run with the same excludes) applied to this branch's changed .ts files, since nothing is currently staged for a literal lint-staged run. 13/1809 related tests failed; all 13 are the same known ambient-env contamination (providers-core.test.ts, AgentCLI-model-source.test.ts, tests/integration/sso-claude-plugin.test.ts). client-install-step.test.ts, client-install.test.ts, and connect-orchestrator.test.ts — the tests directly covering this branch's changed code — all passed."
+    },
+    {
+      "id": "secrets",
+      "source": "guide",
+      "status": "SKIPPED",
+      "duration_ms": 5676,
+      "command": "npm run validate:secrets",
+      "exit_code": 0,
+      "notes": "Self-skip: script printed \"No staged changes to scan\" (scans the staged git diff, not the working tree; nothing is currently `git add`-ed on this branch). Docker daemon is also not running locally, which would independently skip the gate per .husky/pre-commit. To run for real locally: `git add` the intended changes and start Docker/Podman, then re-run `npm run validate:secrets`. CI's gitleaks-action in .github/workflows/ci.yml scans the full PR diff unconditionally regardless of local staging/Docker state — this local SKIPPED does not predict that CI result."
+    },
+    {
+      "id": "commitlint-range",
+      "source": "guide",
+      "status": "PASS",
+      "duration_ms": 4242,
+      "command": "npm run commitlint:last",
+      "exit_code": 0
+    },
+    {
+      "id": "pre-commit-aggregate",
+      "source": "guide",
+      "status": "N/A",
+      "duration_ms": 0,
+      "command": "npm run check:pre-commit",
+      "exit_code": null,
+      "notes": "Composite of the already-run typecheck + lint gates (both PASS above); not re-run separately to avoid duplicating identical work."
+    },
+    {
+      "id": "full-ci",
+      "source": "guide",
+      "status": "N/A",
+      "duration_ms": 0,
+      "command": "npm run ci",
+      "exit_code": null,
+      "notes": "Composite of license-check + lint + build + unit + integration, all already run individually above; not re-run separately to avoid duplicating identical work. Overall status mirrors the individual gates (BLOCKED by the unit gate)."
+    },
+    {
+      "id": "cross-platform-windows",
+      "source": "guide",
+      "status": "N/A",
+      "duration_ms": 0,
+      "command": "N/A (describes CI's test-windows job + CRLF local-repro steps, not a standalone local command)",
+      "exit_code": null,
+      "notes": "This QA run itself executed on a Windows host (win32), so the unit/integration gates above already exercised this platform natively; no separate CRLF repro was needed."
+    },
+    {
+      "id": "pr-title-validation",
+      "source": "ci",
+      "status": "N/A",
+      "duration_ms": 0,
+      "command": "gh pr view <PR_NUMBER> --json title | npx commitlint",
+      "exit_code": null,
+      "notes": "No PR exists yet for this branch; .github/workflows/ci.yml's validate-commits job only runs on pull_request events. Owed to CI once a PR is opened."
+    }
+  ],
+  "failures": {
+    "unit": "- Expected\n+ Received\n\n  [\n+   \"--settings\",\n+   \"C:\\\\Users\\\\RATIGI~1\\\\AppData\\\\Local\\\\Temp\\\\codemie-claude-model-picker-config-34588-1791297751396.json\",\n    \"--model=claude-opus-5\",\n    \"-p\",\n    \"hi\",\n  ]\n\n ❯ src/providers/core/__tests__/providers-core.test.ts:442:64\n    440|       process.env.CODEMIE_MODEL = 'claude-sonnet-5';\n    441|       const args = ['--model=claude-opus-5', '-p', 'hi'];\n    442|       expect(claudeHooks.enrichArgs!(args, {} as AgentConfig)).toBe(ar…\n       |                                                                ^\n    443|     });\n    444|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/10]⎯\n\n FAIL  |unit| src/providers/core/__tests__/providers-core.test.ts > defaultAgentHooks > claude.enrichArgs > ignores a blank CODEMIE_MODEL\nAssertionError: expected [ '--settings', …(3) ] to be [ '-p', 'hi' ] // Object.is equality\n\n- Expected\n+ Received\n\n  [\n+   \"--settings\",\n+   \"C:\\\\Users\\\\RATIGI~1\\\\AppData\\\\Local\\\\Temp\\\\codemie-claude-model-picker-config-34588-1791297751396.json\",\n    \"-p\",\n    \"hi\",\n  ]\n\n ❯ src/providers/core/__tests__/providers-core.test.ts:451:64\n    449|       process.env.CODEMIE_MODEL = '   ';\n    450|       const args = ['-p', 'hi'];\n    451|       expect(claudeHooks.enrichArgs!(args, {} as AgentConfig)).toBe(ar…\n       |                                                                ^\n    452|     });\n    453|   });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/10]⎯\n\n\n Test Files  3 failed | 321 passed | 1 skipped (325)\n      Tests  10 failed | 4786 passed | 12 skipped (4808)\n   Start at  16:36:41\n   Duration  101.92s (transform 83.05s, setup 0ms, import 254.61s, tests 152.49s, environment 120ms)",
+    "integration": "+   \"C:\\\\Users\\\\RATIGI~1\\\\AppData\\\\Local\\\\Temp\\\\codemie-claude-model-picker-config-34588-1791297751396.json\",\n+   \"--model\",\n+   \"claude-sonnet-5[1m]\",\n    \"test\",\n    \"task\",\n  ]\n\n ❯ tests/integration/sso-claude-plugin.test.ts:183:28\n    181|\n    182|       // Verify args unchanged\n    183|       expect(enrichedArgs).toEqual(args);\n       |                            ^\n    184|\n    185|       // Verify --plugin-dir NOT injected\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯\n\n FAIL  |cli| tests/integration/sso-claude-plugin.test.ts > SSO Provider - Claude Plugin Auto-Install > Full Integration Flow > should complete full flow: install → inject\nAssertionError: expected [ '--settings', …(7) ] to deeply equal [ '--plugin-dir', …(3) ]\n\n- Expected\n+ Received\n\n  [\n+   \"--settings\",\n+   \"C:\\\\Users\\\\RATIGI~1\\\\AppData\\\\Local\\\\Temp\\\\codemie-claude-model-picker-config-34588-1791297751396.json\",\n+   \"--model\",\n+   \"claude-sonnet-5[1m]\",\n    \"--plugin-dir\",\n    \"C:\\\\Users\\\\RATIGI~1\\\\AppData\\\\Local\\\\Temp\\\\codemie-test-claude-plugin\\\\claude-plugin\",\n    \"test\",\n    \"task\",\n  ]\n\n ❯ tests/integration/sso-claude-plugin.test.ts:233:28\n    231|\n    232|       // Verify flag injected\n    233|       expect(enrichedArgs).toEqual(['--plugin-dir', pluginTargetDir, '…\n       |                            ^\n    234|     });\n    235|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯\n\n\n Test Files  1 failed | 36 passed | 1 skipped (38)\n      Tests  4 failed | 274 passed | 10 skipped (288)\n   Start at  16:41:13\n   Duration  71.32s (transform 41.99s, setup 0ms, import 78.82s, tests 339.33s, environment 16ms)",
+    "affected-tests": "Same failing specs as the unit and integration gates above (providers-core.test.ts x8, AgentCLI-model-source.test.ts x1, tests/integration/sso-claude-plugin.test.ts x4): all ambient-env contamination from this nested agent session's real CODEMIE_* vars. Confirmed proxy-specific files (client-install-step.test.ts, client-install.test.ts, connect-orchestrator.test.ts) had zero failures.\n\n Test Files  3 failed | 126 passed | 1 skipped (130)\n      Tests  13 failed | 1785 passed | 11 skipped (1809)\n   Start at  16:43:39\n   Duration  89.69s (transform 8.40s, setup 0ms, import 230.40s, tests 175.43s, environment 40ms)"
+  }
+}

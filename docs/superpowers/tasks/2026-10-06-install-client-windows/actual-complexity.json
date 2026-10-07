@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "generated": "2026-10-07T00:00:00Z",
+  "dimensions": {
+    "component_scope":      { "score": 4, "label": "L" },
+    "requirements_clarity": { "score": 3, "label": "M" },
+    "technical_risk":       { "score": 4, "label": "L" },
+    "file_change_estimate": { "score": 4, "label": "L" },
+    "dependencies":         { "score": 1, "label": "XS" },
+    "affected_layers":      { "score": 3, "label": "M" }
+  },
+  "total": 19,
+  "size": "M",
+  "band_range": "15-20",
+  "files_changed": 9,
+  "routing": "brainstorming",
+  "key_reasoning": [
+    { "dimension": "component_scope", "reason": "4 production components across 2 layers share new utilities: client-install.ts (installClientWindows, verifyWindowsSignature, windowsApplicationDirs, resolveClaudeDesktopWindows winget-manifest parsing), client-install-step.ts (Windows-aware neededApps/ensureClientsInstalled flow), connect-orchestrator.ts (wires --install-client/--yes through connectTargets), and index.ts (CLI flag plumbing) — plus the matching three test files." },
+    { "dimension": "technical_risk", "reason": "No exact Windows precedent in the codebase: Authenticode signature verification (verifyWindowsSignature) and winget-pkgs YAML manifest parsing are new, extending the existing macOS codesign/teamId pattern (verifyBundle) to a different verification mechanism. Security-sensitive — it fails closed when no winPublisher is configured and double-checks the installer actually placed the app at dest before reporting success — but code comments flag unconfirmed assumptions (winBundle/winPublisher for Claude Desktop 'not yet confirmed against a real install'), so Technical Risk is bumped from M to L." },
+    { "dimension": "file_change_estimate", "reason": "diffstat reports 9 files changed (670 insertions, 35 deletions) across root (README.md), docs/ (COMMANDS.md), src/cli/commands/proxy/, and src/cli/commands/proxy/__tests__/ — maps to the 7-10 file L band." }
+  ],
+  "red_flags_applied": [
+    "Technical Risk bumped from M (3) to L (4): security-sensitive installer-signature verification work (Authenticode check, winget manifest trust) with no exact precedent on Windows in this codebase, and documented unconfirmed assumptions about the real installer's publisher/bundle name."
+  ],
+  "split_recommendation": null
+}
