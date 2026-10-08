@@ -365,15 +365,14 @@ export function parseAuthenticodeStatus(output: string): { status: string; subje
 
 /**
  * Intact Authenticode signature naming `expectedPublisher` -- the Windows
- * equivalent of verifyBundle's codesign/teamId check above. `filePath` is
- * passed as a script argument rather than interpolated, so it needs no
- * escaping even if it contains quotes.
+ * equivalent of verifyBundle's codesign/teamId check above. `filePath` goes in
+ * a single-quoted PowerShell literal (only ' needs doubling); `-Command` does
+ * not expose trailing arguments as $args, so it can't be passed that way.
  */
 export async function verifyWindowsSignature(filePath: string, expectedPublisher: string): Promise<void> {
   const r = await run('powershell.exe', [
     '-NoProfile', '-NonInteractive', '-Command',
-    '$s = Get-AuthenticodeSignature -LiteralPath $args[0]; Write-Output "$($s.Status)|$($s.SignerCertificate.Subject)"',
-    filePath,
+    `$s = Get-AuthenticodeSignature -LiteralPath '${filePath.replace(/'/g, "''")}'; Write-Output "$($s.Status)|$($s.SignerCertificate.Subject)"`,
   ]);
   if (r.code !== 0) {
     throw new Error(`signature check failed: ${r.stderr || r.stdout}`);
