@@ -3,7 +3,7 @@
  * The install tests drive the real ditto / hdiutil / codesign, so they only run on macOS.
  * @group unit
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
@@ -18,6 +18,7 @@ import {
   parseClaudeReleases,
   parseTeamIdentifier,
   parseVsCodeLatest,
+  resolveClaudeDesktopWindows,
   type ClientSpec,
 } from '../client-install.js';
 
@@ -60,6 +61,105 @@ describe('download sources', () => {
   });
 });
 
+describe('resolveClaudeDesktopWindows', () => {
+  it('picks the user-scope, non-MSIX installer URL and SHA-256 from the winget manifest', async () => {
+    const dirs = [{ name: '0.14.3' }, { name: '0.14.10' }, { name: '0.14.9' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: machine',
+      '    InstallerType: msix',
+      '    InstallerUrl: https://x/msix.msix',
+      '    InstallerSha256: aaa',
+      '  - Scope: user',
+      '    InstallerType: exe',
+      '    InstallerUrl: https://x/user.exe',
+      '    InstallerSha256: bbb',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      if (url.includes('0.14.10')) return new Response(yamlText);
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).resolves.toEqual({
+      url: 'https://x/user.exe',
+      sha256: 'bbb',
+    });
+  });
+
+  it('ignores non-version directory entries (e.g. a README) when picking the latest', async () => {
+    const dirs = [{ name: '0.14.3' }, { name: 'README.md' }, { name: '0.14.10' }, { name: '0.14.9' }, { name: '.validation' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: user',
+      '    InstallerType: exe',
+      '    InstallerUrl: https://x/user.exe',
+      '    InstallerSha256: bbb',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      if (url.includes('/0.14.10/')) return new Response(yamlText);
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).resolves.toEqual({
+      url: 'https://x/user.exe',
+      sha256: 'bbb',
+    });
+  });
+
+  it('refuses when every installer is MSIX or machine-scope', async () => {
+    const dirs = [{ name: '0.14.3' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: machine',
+      '    InstallerType: msix',
+      '    InstallerUrl: https://x/msix.msix',
+      '    InstallerSha256: aaa',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      return new Response(yamlText);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('No supported installer type');
+  });
+
+  it('refuses a user-scope installer whose type is not directly runnable (e.g. msi)', async () => {
+    const dirs = [{ name: '0.14.3' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: user',
+      '    InstallerType: msi',
+      '    InstallerUrl: https://x/user.msi',
+      '    InstallerSha256: aaa',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      return new Response(yamlText);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('No supported installer type');
+  });
+
+  it('refuses a picked installer with no InstallerSha256, rather than silently skipping the checksum', async () => {
+    const dirs = [{ name: '0.14.3' }];
+    const yamlText = [
+      'Installers:',
+      '  - Scope: user',
+      '    InstallerType: exe',
+      '    InstallerUrl: https://x/user.exe',
+      '    InstallerSha256: ""',
+    ].join('\n');
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('api.github.com')) return new Response(JSON.stringify(dirs));
+      return new Response(yamlText);
+    }) as typeof fetch;
+
+    await expect(resolveClaudeDesktopWindows(fetchImpl)).rejects.toThrow('InstallerSha256');
+  });
+});
+
 describe('codesign output', () => {
   it('reads the team identifier', () => {
     expect(parseTeamIdentifier('Identifier=com.microsoft.VSCode\nTeamIdentifier=UBF8T346G9\n')).toBe('UBF8T346G9');
@@ -69,15 +169,58 @@ describe('codesign output', () => {
 
 describe('findInstalledClient', () => {
   let ws: TempWorkspace;
+  const original = process.platform;
   beforeEach(() => { ws = new TempWorkspace('codemie-client-find-'); });
-  afterEach(() => ws.cleanup());
+  afterEach(() => {
+    ws.cleanup();
+    Object.defineProperty(process, 'platform', { value: original, configurable: true });
+  });
 
-  it('finds the bundle in any of the given folders, else null', () => {
+  it('finds the macOS bundle in any of the given folders, else null', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     const a = join(ws.path, 'a');
     const b = join(ws.path, 'b');
     mkdirSync(join(b, 'Claude.app'), { recursive: true });
     expect(findInstalledClient(CLIENT_SPECS['claude-desktop'], [a, b])).toBe(join(b, 'Claude.app'));
     expect(findInstalledClient(CLIENT_SPECS.vscode, [a, b])).toBeNull();
+  });
+
+  it('reports vscode installed when Code.exe exists under the given dir on win32', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const a = join(ws.path, 'a');
+    const b = join(ws.path, 'b', 'Programs', 'Microsoft VS Code');
+    mkdirSync(b, { recursive: true });
+    writeFileSync(join(b, 'Code.exe'), '');
+    expect(findInstalledClient(CLIENT_SPECS.vscode, [a, b])).toBe(join(b, 'Code.exe'));
+  });
+
+  it('reports claude desktop installed when claude.exe exists under the given dir on win32', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const dir = join(ws.path, 'AnthropicClaude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'claude.exe'), '');
+    expect(findInstalledClient(CLIENT_SPECS['claude-desktop'], [dir])).toBe(join(dir, 'claude.exe'));
+  });
+
+  it('reports codex-desktop (ChatGPT) installed on win32 using the given candidate paths directly, not dir+bundle', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const chatgptDir = join(ws.path, 'Programs', 'ChatGPT');
+    mkdirSync(chatgptDir, { recursive: true });
+    // Candidates here are already the full install paths (no winBundle to join), matching
+    // what getCodexDesktopAppCandidates() returns -- unlike vscode/claude-desktop above.
+    expect(findInstalledClient(CLIENT_SPECS['codex-desktop'], [join(ws.path, 'no-such'), chatgptDir])).toBe(chatgptDir);
+  });
+
+  it('reports codex-desktop (ChatGPT) not installed on win32 when none of the candidates exist', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    expect(findInstalledClient(CLIENT_SPECS['codex-desktop'], [join(ws.path, 'no-such')])).toBeNull();
+  });
+
+  it('defaults codex-desktop win32 detection to getCodexDesktopAppCandidates(), not windowsApplicationDirs', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    // No explicit dirs: must fall through to the real default and find nothing
+    // rather than throwing or using windowsApplicationDirs's [] for this app.
+    expect(findInstalledClient(CLIENT_SPECS['codex-desktop'])).toBeNull();
   });
 });
 
@@ -254,14 +397,180 @@ describe.skipIf(!isMac)('installClient (macOS)', () => {
   });
 });
 
-describe('installClient off macOS', () => {
-  it('says it is macOS only', async () => {
+describe('installClient on unsupported platforms', () => {
+  it('rejects linux', async () => {
     const original = process.platform;
-    Object.defineProperty(process, 'platform', { value: 'win32' });
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
     try {
-      await expect(installClient(CLIENT_SPECS.vscode)).rejects.toThrow('only supported on macOS');
+      await expect(installClient(CLIENT_SPECS.vscode)).rejects.toThrow('macOS and Windows');
     } finally {
-      Object.defineProperty(process, 'platform', { value: original });
+      Object.defineProperty(process, 'platform', { value: original, configurable: true });
+    }
+  });
+});
+
+describe('installClient on win32', () => {
+  const original = process.platform;
+
+  beforeEach(() => {
+    vi.resetModules();
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../../../../utils/exec.js');
+    vi.resetModules();
+    Object.defineProperty(process, 'platform', { value: original, configurable: true });
+  });
+
+  function winSpec(overrides: Partial<ClientSpec> = {}): ClientSpec {
+    return {
+      app: 'claude-desktop',
+      label: 'Stand In',
+      bundle: 'Stand In.app',
+      winBundle: 'stand-in.exe',
+      winPublisher: 'Stand In Inc',
+      teamId: 'not set',
+      kind: 'exe',
+      winSilentArgs: ['--silent'],
+      downloadPage: 'https://example.com/download',
+      resolve: async () => ({ url: 'https://example.com/pkg' }),
+      ...overrides,
+    };
+  }
+
+  /**
+   * A `run()` mock: a valid Authenticode signature from `publisher` for the
+   * powershell check; for the installer run, `onInstall` can simulate the
+   * installer actually placing the app (a real installer run has side
+   * effects on disk; this mock has none unless told to).
+   */
+  function mockRun(publisher = 'Stand In Inc', onInstall?: () => void): ReturnType<typeof vi.fn> {
+    return vi.fn().mockImplementation(async (cmd: string) => {
+      if (cmd === 'powershell.exe') return { code: 0, stdout: `Valid|CN=${publisher}`, stderr: '' };
+      onInstall?.();
+      return { code: 0, stdout: '', stderr: '' };
+    });
+  }
+
+  it('runs the downloaded exe with its winSilentArgs after verifying its Authenticode signature, and never calls ditto/hdiutil/codesign', async () => {
+    const ws = new TempWorkspace('codemie-client-win-');
+    const dest = join(ws.path, 'AnthropicClaude');
+    const run = mockRun('Stand In Inc', () => {
+      mkdirSync(dest, { recursive: true });
+      writeFileSync(join(dest, 'stand-in.exe'), '');
+    });
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install } = await import('../client-install.js');
+    try {
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      const path = await install(winSpec(), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      });
+
+      expect(path).toBe(join(dest, 'stand-in.exe'));
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenCalledWith(join(work, 'installer.exe'), ['--silent'], expect.anything());
+      expect(run.mock.calls.some(([cmd]) => cmd === 'powershell.exe')).toBe(true);
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('refuses an installer that exits 0 but never places the app at dest', async () => {
+    const run = mockRun(); // no onInstall: exits 0 but leaves dest absent, like a Squirrel-style installer that silently no-ops.
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install, ClientInstallError } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-missing-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      const err = await install(winSpec(), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ClientInstallError);
+      expect((err as Error).message).toContain('installer finished but');
+      expect((err as Error).message).toContain(join(dest, 'stand-in.exe'));
+      expect((err as Error).message).toContain('was not found');
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('runs no installer when the download fails its checksum, and leaves nothing behind', async () => {
+    const run = mockRun();
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-bad-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      await expect(install(winSpec({ resolve: async () => ({ url: 'https://example.com/pkg', sha256: '00' }) }), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      })).rejects.toThrow('published checksum');
+
+      expect(run).not.toHaveBeenCalled();
+      expect(existsSync(join(dest, 'stand-in.exe'))).toBe(false);
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('refuses an installer whose Authenticode signature is from the wrong publisher, and runs nothing', async () => {
+    const run = mockRun('Someone Else Inc');
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install, ClientInstallError } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-badsig-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      const err = await install(winSpec(), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ClientInstallError);
+      expect((err as Error).message).toContain("isn't signed by its vendor");
+      expect(run).not.toHaveBeenCalledWith(join(work, 'installer.exe'), ['--silent'], expect.anything());
+      expect(existsSync(join(dest, 'stand-in.exe'))).toBe(false);
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('refuses an installer with no valid Authenticode signature at all, and runs nothing', async () => {
+    const run = vi.fn().mockImplementation(async (cmd: string) => {
+      if (cmd === 'powershell.exe') return { code: 0, stdout: 'NotSigned|', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    });
+    vi.doMock('../../../../utils/exec.js', () => ({ exec: run }));
+    const { installClient: install, ClientInstallError } = await import('../client-install.js');
+    const ws = new TempWorkspace('codemie-client-win-nosig-');
+    try {
+      const dest = join(ws.path, 'AnthropicClaude');
+      const work = join(ws.path, 'work');
+      const bytes = new TextEncoder().encode('exe-bytes');
+
+      await expect(install(winSpec(), {
+        destDir: dest, workDir: work, fetchImpl: serving(bytes), log: () => {},
+      })).rejects.toBeInstanceOf(ClientInstallError);
+
+      expect(run).not.toHaveBeenCalledWith(join(work, 'installer.exe'), ['--silent'], expect.anything());
+      expect(existsSync(work)).toBe(false);
+    } finally {
+      ws.cleanup();
     }
   });
 });

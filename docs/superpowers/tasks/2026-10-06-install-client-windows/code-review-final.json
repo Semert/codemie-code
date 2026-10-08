@@ -1,0 +1,110 @@
+{
+  "decision": "request-changes",
+  "rationale": "Edge-case and standards review surfaced 8 blocking defects: 4 critical (a path-join bug plus a missing shell:true that together make the VS Code Claude Code extension install always fail on Windows; a missing codex-desktop entry in windowsApplicationDirs that fires the Store-only error even when ChatGPT is already installed; and a Windows install path with no signature check whose own checksum guard can silently no-op) and 4 major (a non-numeric-unsafe winget version sort, an over-broad installer-type filter, an unverified post-install existence check, and a stale macOS-only module header). 1 edge-case candidate was dismissed as unreachable (installClient's unsupported-app guard, which the only production caller already short-circuits before reaching it); 0 findings were deferred. No lens failed; blind and verification-gap were intentionally skipped per the balanced profile, acceptance found no spec/story to check (standards coverage_gap is false, no decision_needed items), and that genuine no-spec round caps confidence at low despite the otherwise clean coverage.",
+  "confidence": "low",
+  "risk_flags": ["security"],
+  "business_review": [],
+  "standards_review": [
+    {"kind": "commit-format", "status": "pass", "notes": "All 8 commit subjects in range (1af4961c..HEAD) match <type>(<scope>): <subject>; types feat/fix/docs in commitlint type-enum, scope 'proxy' in scope-enum, subjects imperative and under the 100-char max."},
+    {"kind": "code-quality", "status": "partial", "notes": "client-install.ts header JSDoc still macOS-only, now misleading about Windows support and its different (checksum-only) trust model; installClient() also stays ~90 lines, over the <50-line guideline, continuing rather than fixing the pre-existing violation."},
+    {"kind": "security", "status": "na", "notes": "No security guide at the documented path and no security ArtifactRef passed. A concrete security issue was found anyway and is reported as a blocking finding regardless."}
+  ],
+  "findings": [
+    {
+      "id": "CR-001",
+      "kind": "code",
+      "severity": "critical",
+      "triage": "patch",
+      "file": "src/cli/commands/proxy/client-install-step.ts",
+      "line": 131,
+      "title": "VS Code CLI path built from file as directory",
+      "problem": "ensureClientsInstalled builds the VS Code CLI shim path as join(vscodePath, 'bin', 'code.cmd'), but vscodePath (from findInstalledClient/installClient) is already the full path to Code.exe itself, not the install directory.",
+      "impact": "join() treats Code.exe as a folder, producing a path like '...\\Microsoft VS Code\\Code.exe\\bin\\code.cmd' that never exists, so the Claude Code VS Code extension install step always fails on Windows whenever vscodeClaudeCode is targeted -- the exact scenario this change is meant to add.",
+      "recommendation": "Use the install root, e.g. join(dirname(vscodePath), 'bin', 'code.cmd'), mirroring the macOS branch which already derives the CLI from the bundle path."
+    },
+    {
+      "id": "CR-002",
+      "kind": "code",
+      "severity": "critical",
+      "triage": "patch",
+      "file": "src/cli/commands/proxy/client-install-step.ts",
+      "line": 133,
+      "title": "VS Code .cmd shim exec'd without shell:true",
+      "problem": "The extension-install exec(cli, [...]) call passes no `shell` option, so exec()'s default (shell:false) applies even when cli ends in code.cmd on Windows.",
+      "impact": "Node's spawn() cannot directly execute a .cmd file without shell:true -- the same gotcha the codebase already documents and handles for npm.cmd/npx.cmd in src/utils/processes.ts -- so on Windows this fails immediately; even after CR-001's path fix, the Claude Code extension install still never succeeds.",
+      "recommendation": "Pass shell: process.platform === 'win32' into the exec() call, exactly as the npm/npx helpers in src/utils/processes.ts already do for the same reason."
+    },
+    {
+      "id": "CR-003",
+      "kind": "code",
+      "severity": "major",
+      "triage": "patch",
+      "file": "src/cli/commands/proxy/client-install.ts",
+      "line": 1,
+      "title": "Module header doc still macOS-only",
+      "problem": "The file header JSDoc still says the module installs apps 'for the current macOS user' into ~/Applications and describes only the macOS checksum/signature policy, with no mention of the Windows path or its different (checksum-only, no signature) trust model this change adds.",
+      "impact": "The header is the first thing a maintainer reads for this module's contract; it now misstates both platform support and the security guarantee that applies on each, which is how CR-006's missing Windows signature check went unnoticed.",
+      "recommendation": "Update the header to describe both platforms: install locations (Program Files/LocalAppData on Windows), and that Windows installers are checksum-verified only, with no signature check, unlike macOS."
+    },
+    {
+      "id": "CR-004",
+      "kind": "code",
+      "severity": "major",
+      "triage": "patch",
+      "file": "src/cli/commands/proxy/client-install.ts",
+      "line": 129,
+      "title": "winget version-dir listing not filtered to numeric names",
+      "problem": "resolveClaudeDesktopWindows takes every entry name GitHub's contents API returns for the winget-pkgs Claude manifests directory and sorts them with compareVersions directly, with no filter for non-version-numbered entries (e.g. a README or a future non-version folder).",
+      "impact": "compareVersions splits each name on '.' and maps to Number; a non-numeric name produces NaN comparisons, which can corrupt the sort order and silently pick the wrong manifest directory as 'latest' -- reachability depends on winget-pkgs' directory listing, which this code does not control.",
+      "recommendation": "Filter dirs to names matching /^\\d+(\\.\\d+)*$/ before sorting, so a non-version entry is ignored rather than corrupting the comparison."
+    },
+    {
+      "id": "CR-005",
+      "kind": "code",
+      "severity": "major",
+      "triage": "patch",
+      "file": "src/cli/commands/proxy/client-install.ts",
+      "line": 139,
+      "title": "Non-executable installer types treated as runnable exe",
+      "problem": "The Claude Desktop Windows installer picker only excludes InstallerType 'msix' (i.InstallerType !== 'msix'), so a user-scope entry of type msi/zip/wix would also match even though only a directly runnable exe-style installer belongs here.",
+      "impact": "A non-executable installer type gets saved as installer.exe and handed to run(), producing a confusing exec failure instead of a clear 'unsupported installer type' error -- and if the manifest's only user-scope non-msix entry is ever such a type, Windows installs of Claude Desktop fail with no actionable message.",
+      "recommendation": "Restrict the filter to installer types that are directly runnable (e.g. exe/burn/nullsoft/inno) and throw a clear 'no supported installer type' error otherwise."
+    },
+    {
+      "id": "CR-006",
+      "kind": "code",
+      "severity": "critical",
+      "triage": "patch",
+      "file": "src/cli/commands/proxy/client-install.ts",
+      "line": 139,
+      "title": "Windows installer runs with no signature check and a checksum that can silently no-op",
+      "problem": "resolveClaudeDesktopWindows returns picked.InstallerSha256 typed as required but only enforced by a TypeScript cast, not at runtime; downloadToFile's checksum gate is `if (sha256 && ...)`, so an empty/missing hash from the community-maintained winget manifest silently skips verification. Unlike installClient's macOS path, which always runs an independent codesign/Developer-ID check (verifyBundle) regardless of checksum availability, installClientWindows has no equivalent signature check at all -- the Windows path's only line of defense is a hash sourced from the same feed it is meant to validate.",
+      "impact": "A missing/blank checksum field in the manifest (or a future ClientSpec added without a guaranteed sha256) causes CodeMie to download and silently run an unverified Windows installer.exe under the user's account with zero authenticity verification -- a supply-chain execution risk with no fallback, unlike macOS.",
+      "recommendation": "Throw in resolveClaudeDesktopWindows if InstallerSha256 is empty/missing rather than letting the checksum check become a no-op, and add a Windows-side authenticity check (e.g. verify the installer's Authenticode publisher certificate) before run(), mirroring the macOS verifyBundle gate."
+    },
+    {
+      "id": "CR-007",
+      "kind": "code",
+      "severity": "critical",
+      "triage": "patch",
+      "file": "src/cli/commands/proxy/client-install.ts",
+      "line": 202,
+      "title": "windowsApplicationDirs has no codex-desktop case",
+      "problem": "windowsApplicationDirs returns install-dir candidates for 'vscode' and 'claude-desktop' only; for any other app -- specifically 'codex-desktop' -- it falls through to `return [];`.",
+      "impact": "findInstalledClient(spec) for codex-desktop on Windows always gets dirs=[] and therefore always returns null, so ensureClientsInstalled's codex-desktop win32 branch treats ChatGPT as never installed and throws the Store-only error every time -- even when ChatGPT is already installed. This directly violates the task's explicit 'never reinstall an already-installed app' requirement for every Windows user who already has ChatGPT.",
+      "recommendation": "Add a codex-desktop case to windowsApplicationDirs pointing at its real per-user ChatGPT (WindowsApps/Store) install location so findInstalledClient can correctly detect it before the Store-only short-circuit runs."
+    },
+    {
+      "id": "CR-008",
+      "kind": "code",
+      "severity": "major",
+      "triage": "patch",
+      "file": "src/cli/commands/proxy/client-install.ts",
+      "line": 372,
+      "title": "Installer exit 0 not verified against the install dest",
+      "problem": "After running the Windows installer, installClientWindows only checks the process exit code (r.code !== 0) before logging success and returning dest; it never confirms the app actually landed at dest (join(destDir, bundle)), unlike the macOS path which only renames staging into dest once the copy itself succeeded.",
+      "impact": "The Claude Desktop winBundle/install-location mapping is explicitly flagged in the surrounding spec comment as best-effort and not yet confirmed against a real install; if a Squirrel-style installer exits 0 before (or without) placing the app where predicted, installClientWindows reports success and hands back a path that doesn't exist, so the next step (e.g. the VS Code extension install, or a later findInstalledClient check) fails with a misleading error instead of a clear install-verification failure.",
+      "recommendation": "After the installer exits 0, check existsSync(dest) and throw a clear '<app> installer finished but <dest> was not found' ClientInstallError if it's missing, rather than trusting the exit code alone."
+    }
+  ]
+}

@@ -550,7 +550,7 @@ codemie proxy connect --vscode-claude-code                   # VS Code Claude Co
 codemie proxy connect --claude-desktop --vscode --insiders   # combine targets in one run
 ```
 
-Flags are composable: a single run configures every target you pass, prints a per-target summary, and exits non-zero if any target fails. Run `codemie proxy connect` with no flags to list the available targets. Shared options: `--profile <name>`, `--force`, `--verbose`, `--insiders` (VS Code targets only), and on macOS `--install-client` (download and install a missing app first) with `--yes` (skip its confirmation).
+Flags are composable: a single run configures every target you pass, prints a per-target summary, and exits non-zero if any target fails. Run `codemie proxy connect` with no flags to list the available targets. Shared options: `--profile <name>`, `--force`, `--verbose`, `--insiders` (VS Code targets only), and on macOS and Windows `--install-client` (download and install a missing app first) with `--yes` (skip its confirmation). Codex/ChatGPT is the exception: it is Store-only on Windows, so `--install-client` never downloads or prompts for it there — install it from the Microsoft Store yourself.
 
 Remove a target's configuration with `codemie proxy disconnect`:
 

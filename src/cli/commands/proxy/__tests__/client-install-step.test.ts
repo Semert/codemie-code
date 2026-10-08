@@ -175,7 +175,25 @@ describe('ensureClientsInstalled', () => {
     expect(exec).toHaveBeenCalledWith(
       '/u/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
       ['--install-extension', 'anthropic.claude-code'],
-      expect.objectContaining({ timeout: expect.any(Number) })
+      expect.objectContaining({ timeout: expect.any(Number), shell: false })
+    );
+  });
+
+  it('runs bin\\code.cmd for the extension install on win32, derived from the Code.exe install root, with shell:true', async () => {
+    const { step, ci, exec } = await load();
+    setPlatform('win32');
+    vi.mocked(ci.findInstalledClient).mockReturnValue(null);
+    // vscodePath is the full path to Code.exe itself (what findInstalledClient /
+    // installClient return on win32), not the install directory.
+    vi.mocked(ci.installClient).mockResolvedValue('C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe');
+    exec.mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+
+    await step.ensureClientsInstalled({ vscode: true, vscodeClaudeCode: true }, { yes: true });
+
+    expect(exec).toHaveBeenCalledWith(
+      'C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.cmd',
+      ['--install-extension', 'anthropic.claude-code'],
+      expect.objectContaining({ timeout: expect.any(Number), shell: true })
     );
   });
 
@@ -226,6 +244,32 @@ describe('ensureClientsInstalled', () => {
     expect(err.downloadPage).toBe(ci.CLIENT_SPECS.vscode.downloadPage);
   });
 
+  it('throws for codex-desktop on win32 without resolving a download or prompting', async () => {
+    const { step, ci, prompt } = await load();
+    setPlatform('win32');
+    vi.mocked(ci.findInstalledClient).mockReturnValue(null);
+
+    const err = await step.ensureClientsInstalled({ codexDesktop: true }, { yes: true }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ci.ClientInstallError);
+    expect(err.message).toContain('Microsoft Store');
+    expect(err.downloadPage).toBe(ci.CLIENT_SPECS['codex-desktop'].downloadPage);
+    expect(ci.CLIENT_SPECS['codex-desktop'].resolve).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+    expect(ci.installClient).not.toHaveBeenCalled();
+  });
+
+  it('still skips codex-desktop on win32 when it is already installed', async () => {
+    const { step, ci } = await load();
+    setPlatform('win32');
+    vi.mocked(ci.findInstalledClient).mockReturnValue('C:\\Program Files\\ChatGPT');
+
+    const r = await step.ensureClientsInstalled({ codexDesktop: true }, {});
+
+    expect(r).toBe('proceed');
+    expect(ci.installClient).not.toHaveBeenCalled();
+  });
+
   it('aborts before downloading anything when any app is declined', async () => {
     const { step, ci, prompt } = await load();
     vi.mocked(ci.findInstalledClient).mockReturnValue(null);
@@ -244,9 +288,14 @@ describe('assertInstallClientSupported', () => {
     expect(() => step.assertInstallClientSupported({}, 'darwin')).not.toThrow();
   });
 
-  it.each(['win32', 'linux'] as const)('rejects %s', async (p) => {
+  it('rejects linux', async () => {
     const { step } = await load();
-    expect(() => step.assertInstallClientSupported({}, p)).toThrow('macOS');
+    expect(() => step.assertInstallClientSupported({}, 'linux')).toThrow('macOS');
+  });
+
+  it('accepts win32', async () => {
+    const { step } = await load();
+    expect(() => step.assertInstallClientSupported({}, 'win32')).not.toThrow();
   });
 
   it('rejects --insiders', async () => {

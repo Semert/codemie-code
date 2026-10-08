@@ -1,12 +1,22 @@
 /**
  * Installs a client app (Claude Desktop, VS Code, the ChatGPT app that ships
- * Codex) for the current macOS user, so `proxy connect` can then configure it.
+ * Codex) for the current user, so `proxy connect` can then configure it. Runs
+ * on macOS and Windows; on Windows only Claude Desktop and VS Code are
+ * installable from here (ChatGPT is Store-only there, see client-install-step.ts).
  *
- * Nothing is bundled: each app comes from its vendor when asked for. VS Code
- * publishes a SHA-256 per build and it is checked. Every bundle must also carry
- * an intact signature from the vendor's Developer ID team before it is copied,
- * since Claude Desktop and ChatGPT publish no checksum. Apps go into
+ * Nothing is bundled: each app comes from its vendor when asked for.
+ *
+ * On macOS, every downloaded bundle must carry an intact signature from the
+ * vendor's Developer ID team before it is copied (verifyBundle), and VS Code's
+ * published SHA-256 is also checked when the feed provides one. Apps go into
  * ~/Applications, so no administrator password is ever needed.
+ *
+ * On Windows, installers are checked by SHA-256 checksum (VS Code's own feed
+ * for VS Code, the community winget-pkgs manifest for Claude Desktop, which
+ * must always carry one) and by an Authenticode signature naming the vendor's
+ * publisher (verifyWindowsSignature, every spec installable on Windows must
+ * configure one). The per-user installer then runs silently into Program
+ * Files/LocalAppData, again with no administrator password needed.
  */
 import { createHash } from 'node:crypto';
 import { createWriteStream, existsSync } from 'node:fs';
@@ -14,9 +24,11 @@ import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { CodeMieError } from '@/utils/errors.js';
 import { exec } from '@/utils/exec.js';
 import { logger } from '@/utils/logger.js';
+import { getCodexDesktopAppCandidates } from './connectors/codex-desktop.js';
 
 export type ClientApp = 'claude-desktop' | 'vscode' | 'codex-desktop';
 
@@ -36,7 +48,18 @@ export interface ClientSpec {
   bundle: string;
   /** Apple Developer ID team that must have signed the bundle. */
   teamId: string;
-  kind: 'zip' | 'dmg';
+  kind: 'zip' | 'dmg' | 'exe';
+  /** Executable name checked for on Windows, where apps are files, not .app bundles. */
+  winBundle?: string;
+  /** Args that make the Windows installer run silently, per-user, with no UAC prompt. */
+  winSilentArgs?: string[];
+  /**
+   * Substring of the Authenticode signer certificate Subject that a genuine
+   * Windows installer for this app must carry. Required for every spec
+   * actually installable on Windows (installClientWindows refuses to run an
+   * installer for a spec missing this).
+   */
+  winPublisher?: string;
   /** Vendor page the user can download the app from themselves. */
   downloadPage: string;
   resolve: (fetchImpl: typeof fetch) => Promise<ClientDownload>;
@@ -51,8 +74,10 @@ export class ClientInstallError extends CodeMieError {
 }
 
 const VSCODE_LATEST = 'https://update.code.visualstudio.com/api/update/darwin-universal/stable/latest';
+const WINDOWS_VSCODE_LATEST = 'https://update.code.visualstudio.com/api/update/win32-x64-user/stable/latest';
 const CLAUDE_RELEASES = 'https://downloads.claude.ai/releases/darwin/universal/RELEASES.json';
 const CODEX_DMG = 'https://persistent.oaistatic.com/codex-app-prod/Codex.dmg';
+const WINGET_CLAUDE_DIR = 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/a/Anthropic/Claude';
 
 /** Bound on each helper process (unpack, mount, verify, copy). */
 const STEP_TIMEOUT_MS = 5 * 60_000;
@@ -101,16 +126,61 @@ export function parseClaudeReleases(json: unknown): string {
   return url;
 }
 
+/** Ascending numeric compare of dot-separated version strings (e.g. "0.14.9" < "0.14.10"). */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/** winget InstallerType values that are a directly runnable executable. */
+const RUNNABLE_INSTALLER_TYPES = new Set(['exe', 'burn', 'nullsoft', 'inno']);
+
+/**
+ * The current per-user Claude Desktop installer for Windows, read from the
+ * community-maintained winget-pkgs manifest (Claude Desktop publishes no
+ * update feed of its own for Windows, unlike its macOS RELEASES.json).
+ */
+export async function resolveClaudeDesktopWindows(fetchImpl: typeof fetch): Promise<ClientDownload> {
+  const dirs = (await getJson(fetchImpl, WINGET_CLAUDE_DIR)) as Array<{ name: string }>;
+  const versionDir = /^\d+(\.\d+)*$/;
+  const latest = dirs.map((d) => d.name).filter((name) => versionDir.test(name)).sort(compareVersions).at(-1);
+  if (!latest) throw new Error('No Anthropic.Claude version found in winget-pkgs');
+  const res = await fetchImpl(
+    `https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/a/Anthropic/Claude/${latest}/Anthropic.Claude.installer.yaml`,
+    { redirect: 'follow', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status} for Anthropic.Claude.installer.yaml`);
+  const manifest = parseYaml(await res.text()) as {
+    Installers: Array<{ Scope?: string; InstallerType?: string; InstallerUrl: string; InstallerSha256: string }>;
+  };
+  const picked = manifest.Installers.find((i) => i.Scope === 'user' && RUNNABLE_INSTALLER_TYPES.has(i.InstallerType ?? ''));
+  if (!picked) throw new Error(`No supported installer type (${[...RUNNABLE_INSTALLER_TYPES].join('/')}) found for a per-user Claude Desktop installer in the manifest`);
+  // The checksum check downstream (downloadToFile) is a no-op when sha256 is
+  // falsy, so a manifest with a blank InstallerSha256 must fail here instead
+  // of silently installing an unverified download.
+  if (!picked.InstallerSha256) throw new Error('The picked Claude Desktop installer manifest entry has no InstallerSha256');
+  return { url: picked.InstallerUrl, sha256: picked.InstallerSha256 };
+}
+
 export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
   'vscode': {
     app: 'vscode',
     label: 'VS Code',
     bundle: 'Visual Studio Code.app',
     teamId: 'UBF8T346G9',
-    kind: 'zip',
+    kind: process.platform === 'win32' ? 'exe' : 'zip',
+    winBundle: 'Code.exe',
+    winSilentArgs: ['/VERYSILENT', '/NORESTART', '/MERGETASKS=!runcode'],
+    winPublisher: 'Microsoft Corporation',
     downloadPage: 'https://code.visualstudio.com/download',
     resolve: async (fetchImpl) => {
-      const { url, sha256 } = parseVsCodeLatest(await getJson(fetchImpl, VSCODE_LATEST));
+      const feedUrl = process.platform === 'win32' ? WINDOWS_VSCODE_LATEST : VSCODE_LATEST;
+      const { url, sha256 } = parseVsCodeLatest(await getJson(fetchImpl, feedUrl));
       return { url, sha256, size: await headSize(fetchImpl, url) };
     },
   },
@@ -119,9 +189,22 @@ export const CLIENT_SPECS: Record<ClientApp, ClientSpec> = {
     label: 'Claude Desktop',
     bundle: 'Claude.app',
     teamId: 'Q6L2SF6YDW',
-    kind: 'zip',
+    kind: process.platform === 'win32' ? 'exe' : 'zip',
+    // Best-effort: the squirrel-style installer's own root-level launcher shim.
+    // Not yet confirmed against a real install (not installed on the machine
+    // this was written on); a one-line fix here if the real folder/exe differs.
+    winBundle: 'claude.exe',
+    winSilentArgs: ['--silent'],
+    // Best-effort: Anthropic's actual Authenticode certificate Subject is not
+    // confirmed against a real signed installer; a one-line fix here if the
+    // real certificate names the publisher differently.
+    winPublisher: 'Anthropic, PBC',
     downloadPage: 'https://claude.com/download',
     resolve: async (fetchImpl) => {
+      if (process.platform === 'win32') {
+        const download = await resolveClaudeDesktopWindows(fetchImpl);
+        return { ...download, size: await headSize(fetchImpl, download.url) };
+      }
       const url = parseClaudeReleases(await getJson(fetchImpl, CLAUDE_RELEASES));
       return { url, size: await headSize(fetchImpl, url) };
     },
@@ -142,9 +225,51 @@ export function applicationDirs(home: string = homedir()): string[] {
   return ['/Applications', join(home, 'Applications')];
 }
 
-/** Where the app is installed, or null. Same places CodeMie Connect checks. */
-export function findInstalledClient(spec: ClientSpec, dirs: string[] = applicationDirs()): string | null {
-  return dirs.map((d) => join(d, spec.bundle)).find((p) => existsSync(p)) ?? null;
+/**
+ * Windows candidate install dirs, per app: both the machine-wide and per-user
+ * locations the ticket's "per-user or machine-wide" wording covers, matching
+ * where each vendor's own installer places itself.
+ *
+ * Does not cover codex-desktop: ChatGPT is Store-only on Windows (see
+ * client-install-step.ts) and a Store install lives under WindowsApps, with
+ * no predictable per-user/machine folder this function's dir+bundle shape
+ * could return. findInstalledClient detects it separately, below.
+ */
+export function windowsApplicationDirs(app: ClientApp, home: string = homedir()): string[] {
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
+  const programFilesX86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)';
+  const localAppData = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local');
+  if (app === 'vscode') {
+    return [
+      join(programFiles, 'Microsoft VS Code'),
+      join(programFilesX86, 'Microsoft VS Code'),
+      join(localAppData, 'Programs', 'Microsoft VS Code'),
+    ];
+  }
+  if (app === 'claude-desktop') {
+    return [join(localAppData, 'AnthropicClaude')];
+  }
+  return [];
+}
+
+/**
+ * Where the app is installed, or null. Same places CodeMie Connect checks:
+ * for codex-desktop on win32 this is literally the same candidates
+ * getCodexDesktopAppCandidates() (the Codex connector's own detection) uses,
+ * since those candidates are already full install paths, not dirs to join
+ * with a bundle name.
+ */
+export function findInstalledClient(
+  spec: ClientSpec,
+  dirs: string[] = process.platform === 'win32'
+    ? (spec.app === 'codex-desktop' ? getCodexDesktopAppCandidates() : windowsApplicationDirs(spec.app))
+    : applicationDirs()
+): string | null {
+  if (process.platform === 'win32' && spec.app === 'codex-desktop') {
+    return dirs.find((p) => existsSync(p)) ?? null;
+  }
+  const bundle = process.platform === 'win32' ? (spec.winBundle ?? spec.bundle) : spec.bundle;
+  return dirs.map((d) => join(d, bundle)).find((p) => existsSync(p)) ?? null;
 }
 
 /** The `TeamIdentifier=` value from `codesign -dv` output. */
@@ -232,6 +357,35 @@ export async function verifyBundle(bundlePath: string, teamId: string): Promise<
   }
 }
 
+/** The `Status|Subject` line this module's PowerShell signature check prints. */
+export function parseAuthenticodeStatus(output: string): { status: string; subject: string } {
+  const [status = '', subject = ''] = output.trim().split('|');
+  return { status, subject };
+}
+
+/**
+ * Intact Authenticode signature naming `expectedPublisher` -- the Windows
+ * equivalent of verifyBundle's codesign/teamId check above. `filePath` goes in
+ * a single-quoted PowerShell literal (only ' needs doubling); `-Command` does
+ * not expose trailing arguments as $args, so it can't be passed that way.
+ */
+export async function verifyWindowsSignature(filePath: string, expectedPublisher: string): Promise<void> {
+  const r = await run('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    `$s = Get-AuthenticodeSignature -LiteralPath '${filePath.replace(/'/g, "''")}'; Write-Output "$($s.Status)|$($s.SignerCertificate.Subject)"`,
+  ]);
+  if (r.code !== 0) {
+    throw new Error(`signature check failed: ${r.stderr || r.stdout}`);
+  }
+  const { status, subject } = parseAuthenticodeStatus(r.stdout);
+  if (status !== 'Valid') {
+    throw new Error(`signature check failed: status ${status || 'unknown'}`);
+  }
+  if (!subject.includes(expectedPublisher)) {
+    throw new Error(`signed by "${subject || 'nobody'}", expected a certificate naming "${expectedPublisher}"`);
+  }
+}
+
 async function bundleVersion(bundlePath: string): Promise<string> {
   const r = await run('/usr/bin/plutil', [
     '-extract', 'CFBundleShortVersionString', 'raw', join(bundlePath, 'Contents', 'Info.plist'),
@@ -252,17 +406,97 @@ export interface InstallClientOptions {
 }
 
 /**
+ * Downloads, checks and silently runs the Windows installer for `spec`. The
+ * installer places the app itself (there is no bundle directory to stage and
+ * rename), so this skips the macOS unpack/verify/copy pipeline entirely: once
+ * the checksum has matched, the installer is run and its own per-user,
+ * no-UAC install location (Task 2's winBundle/windowsApplicationDirs
+ * constants) is returned.
+ */
+async function installClientWindows(
+  spec: ClientSpec,
+  opts: { fetchImpl: typeof fetch; log: (line: string) => void; workDir?: string; download?: ClientDownload; destDir?: string }
+): Promise<string> {
+  const fail = (msg: string) => new ClientInstallError(msg, spec.downloadPage);
+  const bundle = spec.winBundle ?? spec.bundle;
+  const destDir = opts.destDir ?? windowsApplicationDirs(spec.app).at(-1) ?? homedir();
+  const dest = join(destDir, bundle);
+  if (existsSync(dest)) {
+    throw fail(`${spec.label} is already installed at ${dest}.`);
+  }
+  // Fail closed: an app spec with no configured publisher would otherwise run
+  // an unverified installer, since checksum verification alone is not enough
+  // (a manifest-sourced hash is no stronger a guarantee than its own feed).
+  const winPublisher = spec.winPublisher;
+  if (!winPublisher) {
+    throw fail(`No Windows publisher is configured to verify ${spec.label}'s signature.`);
+  }
+
+  let work = opts.workDir ?? '';
+  try {
+    work = opts.workDir ?? (await mkdtemp(join(tmpdir(), 'codemie-client-')));
+    await mkdir(work, { recursive: true });
+    const pkg = join(work, 'installer.exe');
+    let download = opts.download;
+    try {
+      download ??= await spec.resolve(opts.fetchImpl);
+      await downloadToFile(download.url, pkg, download.sha256, opts.fetchImpl);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      const code = (e as NodeJS.ErrnoException)?.code;
+      throw fail(reason === 'checksum mismatch'
+        ? `The ${spec.label} download didn't match its published checksum, so it was not installed.`
+        : code === 'ENOSPC' || code === 'EACCES' || code === 'EPERM'
+          ? `Couldn't save the ${spec.label} download (${reason}). Free up disk space and try again.`
+          : `Couldn't download ${spec.label} (${reason}). Check your connection and try again.`);
+    }
+    opts.log(`✓ Downloaded ${spec.label}`);
+
+    try {
+      await verifyWindowsSignature(pkg, winPublisher);
+    } catch (e) {
+      logger.debug('[client-install] windows signature verify failed', { app: spec.app, error: String(e) });
+      throw fail(`The ${spec.label} download isn't signed by its vendor, so it was not installed.`);
+    }
+    opts.log('✓ Checked the download is genuine');
+
+    const r = await run(pkg, spec.winSilentArgs ?? []);
+    if (r.code !== 0) {
+      throw fail(`Installing ${spec.label} failed (exit ${r.code}): ${r.stderr || r.stdout}`);
+    }
+    // The winBundle/windowsApplicationDirs mapping is best-effort; an exit 0
+    // alone does not prove the installer actually placed the app at `dest`
+    // (e.g. a Squirrel-style installer that silently no-ops), so check for it.
+    if (!existsSync(dest)) {
+      throw fail(`${spec.label} installer finished but ${dest} was not found.`);
+    }
+    opts.log('✓ Installed for your account');
+    return dest;
+  } catch (e) {
+    if (e instanceof ClientInstallError) throw e;
+    throw fail(`Installing ${spec.label} failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    if (work) await rm(work, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
  * Downloads, checks and installs `spec` into ~/Applications. Throws
  * ClientInstallError on any failure, after removing the download and any
  * partly copied app. Never touches an app that is already at the destination.
  */
 export async function installClient(spec: ClientSpec, opts: InstallClientOptions = {}): Promise<string> {
   const fail = (msg: string) => new ClientInstallError(msg, spec.downloadPage);
-  if (process.platform !== 'darwin') {
-    throw fail(`Installing ${spec.label} from the CLI is only supported on macOS for now.`);
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
+    throw fail(`Installing ${spec.label} from the CLI is only supported on macOS and Windows for now.`);
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
   const log = opts.log ?? ((line: string) => console.log(line));
+
+  if (process.platform === 'win32') {
+    return installClientWindows(spec, { fetchImpl, log, workDir: opts.workDir, download: opts.download, destDir: opts.destDir });
+  }
+
   const destDir = opts.destDir ?? join(homedir(), 'Applications');
   const dest = join(destDir, spec.bundle);
   if (existsSync(dest)) {

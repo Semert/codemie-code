@@ -4,6 +4,7 @@
  * and prepares VS Code so its targets can be configured right away.
  */
 import { mkdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { ConfigurationError } from '@/utils/errors.js';
 import { exec } from '@/utils/exec.js';
 import { logger } from '@/utils/logger.js';
@@ -33,8 +34,8 @@ export function assertInstallClientSupported(
   opts: InstallClientOptions,
   platform: NodeJS.Platform = process.platform
 ): void {
-  if (platform !== 'darwin') {
-    throw new ConfigurationError('--install-client is only supported on macOS.');
+  if (platform !== 'darwin' && platform !== 'win32') {
+    throw new ConfigurationError('--install-client is only supported on macOS and Windows.');
   }
   if (opts.insiders) {
     throw new ConfigurationError('--install-client does not support --insiders (VS Code Insiders is not installed by the CLI).');
@@ -90,6 +91,11 @@ export async function ensureClientsInstalled(
       paths.set(app, found);
       continue;
     }
+    if (app === 'codex-desktop' && process.platform === 'win32') {
+      // The ChatGPT desktop app is Store-only on Windows: CodeMie never
+      // downloads or prompts for it there, unlike every other platform/app.
+      throw new ClientInstallError('ChatGPT must be installed from the Microsoft Store.', spec.downloadPage);
+    }
     if (!process.stdin.isTTY && !opts.yes) {
       throw new ConfigurationError(
         `${spec.label} is not installed. Re-run with --yes to install it without a prompt.`
@@ -119,8 +125,18 @@ export async function ensureClientsInstalled(
   }
 
   if (targets.vscodeClaudeCode && vscodePath) {
-    const cli = `${vscodePath}/Contents/Resources/app/bin/code`;
-    const result = await exec(cli, ['--install-extension', CLAUDE_CODE_EXTENSION], { timeout: EXTENSION_TIMEOUT_MS })
+    // macOS ships a .app bundle (Contents/Resources/app/bin/code). On Windows,
+    // vscodePath is the full path to Code.exe itself, and the CLI shim lives
+    // under bin/ beside it, so the install root is its *parent* directory.
+    const cli = process.platform === 'win32'
+      ? join(dirname(vscodePath), 'bin', 'code.cmd')
+      : `${vscodePath}/Contents/Resources/app/bin/code`;
+    // code.cmd is a .cmd shim: Node's spawn() cannot exec it without a shell,
+    // the same gotcha src/utils/processes.ts already handles for npm.cmd/npx.cmd.
+    const result = await exec(cli, ['--install-extension', CLAUDE_CODE_EXTENSION], {
+      timeout: EXTENSION_TIMEOUT_MS,
+      shell: process.platform === 'win32',
+    })
       .catch((e: unknown) => ({ code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) }));
     if (result.code !== 0) {
       logger.debug('VS Code extension install failed', result.stderr);
