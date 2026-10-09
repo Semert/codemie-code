@@ -162,6 +162,9 @@ describe('BaseExtensionInstaller repairs stale hook paths on already_exists', ()
     return p;
   };
 
+  // resolveCodemieBinary writes Windows paths with forward slashes (they run through bash).
+  const asHookPath = (p: string): string => p.replace(/\\/g, '/');
+
   it('rewrites commands pointing at a deleted codemie path to the current one', async () => {
     const a = await makeBin('a');
     const b = await makeBin('b');
@@ -175,7 +178,7 @@ describe('BaseExtensionInstaller repairs stale hook paths on already_exists', ()
 
     const installed = JSON.parse(await readFile(hooksPath(), 'utf-8'));
     const cmds = installed.hooks.SessionStart[0].hooks.map((h: { command: string }) => h.command);
-    expect(cmds).toEqual([`${b} hook`, `${b} sound SessionStart`]);
+    expect(cmds).toEqual([`${asHookPath(b)} hook`, `${asHookPath(b)} sound SessionStart`]);
   });
 
   it('does not write or look up PATH when the codemie path still exists', async () => {
@@ -235,6 +238,6 @@ describe('BaseExtensionInstaller repairs stale hook paths on already_exists', ()
 
     const installed = JSON.parse(await readFile(hooksPath(), 'utf-8'));
     const cmds = installed.hooks.SessionStart[0].hooks.map((h: { command: string }) => h.command);
-    expect(cmds).toEqual([`${b} hook`, `${b} sound SessionStart`, '/usr/bin/other hook', './codemie hook']);
+    expect(cmds).toEqual([`${asHookPath(b)} hook`, `${asHookPath(b)} sound SessionStart`, '/usr/bin/other hook', './codemie hook']);
   });
 });
