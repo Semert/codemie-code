@@ -2,7 +2,7 @@
 
 This directory contains source files for the CodeMie installers:
 
-- **CodeMie Connect** — a signed `.dmg` (macOS, Apple Silicon) and a `.exe` (Windows) desktop app that bundles Node.js, npm and the CodeMie CLI, so there is nothing to install first.
+- **CodeMie Connect** — a signed `.dmg` desktop app for macOS (Apple Silicon) that sets up Node.js and the CodeMie CLI on first launch, so there is nothing to install first. The Windows build is coming.
 - **Script installers** — plain shell/PowerShell bootstrap scripts that install via npm. Prefer these for CI, headless machines, or when CodeMie Connect is unavailable.
 
 ## Distribution Models
@@ -15,8 +15,8 @@ Two distribution models are supported:
    - macOS/Linux/WSL: `install/macos/install.sh`
 
 2. **CodeMie Connect** — a self-contained desktop app:
-   - macOS: `install/macos/CodeMie Connect_2.1.0_aarch64.dmg`
-   - Windows: `install/windows/CodeMie Connect_2.1.0_x64-setup.exe`
+   - macOS: `install/macos/CodeMie-Connect-2.1.0-aarch64.dmg`
+   - `install/manifest.json` tells installed apps which version is the latest and where to download it.
 
 The scripts can be run directly from GitHub raw URLs or mirrored to Artifactory later. They do not require CodeMie Connect.
 
@@ -116,39 +116,23 @@ npm i -g @anthropic-ai/claude-code@latest   # repeat for each package listed in 
 
 ## Windows Installation
 
-`install/windows/CodeMie Connect_2.1.0_x64-setup.exe` is CodeMie Connect, a self-contained Windows desktop app. It bundles Node.js, npm and the CodeMie CLI, so nothing needs to be installed first.
-
-### Running CodeMie Connect
-
-Double-click `CodeMie Connect_2.1.0_x64-setup.exe`. After install, the app runs a guided setup (sign in, pick a model, install a tool), then opens to a Home screen, a Tools screen for installing or removing coding tools, and a Health screen that runs `codemie doctor`.
-
-Installed coding tools are placed under `%USERPROFILE%\.codemie\agents`.
-
-### Log File
-
-App output is written to:
-
-```text
-%USERPROFILE%\AppData\Local\CodeMie\Logs\codemie_wizard.log
-```
-
-The log persists across runs.
+The Windows build of CodeMie Connect is coming. Until then, use the Windows PowerShell or CMD script installer above.
 
 ## macOS Installation
 
-`install/macos/CodeMie Connect_2.1.0_aarch64.dmg` is CodeMie Connect, a signed macOS desktop app for **Apple Silicon (aarch64)** Macs. It bundles Node.js, npm and the CodeMie CLI, so nothing needs to be installed first. (An Intel x86_64 build is not shipped.)
+`install/macos/CodeMie-Connect-2.1.0-aarch64.dmg` is CodeMie Connect, a signed and notarized macOS desktop app for **Apple Silicon (aarch64)** Macs. On first launch it downloads Node.js and the CodeMie CLI for its own use, so nothing needs to be installed first, and it keeps that CLI up to date in the background. (An Intel x86_64 build is not shipped.)
 
-CodeMie Connect is built from a separate repository (`codemie-claude-installer-macos`); the `.dmg` committed here is the distributed artifact.
+CodeMie Connect is built from a separate repository (`codemie-connect`); the `.dmg` committed here is the distributed artifact.
 
 ### Running CodeMie Connect
 
-Download `CodeMie Connect_2.1.0_aarch64.dmg` from the [macOS install folder](https://github.com/codemie-ai/codemie-code/tree/main/install/macos), open it, and run the app. It runs a guided setup (sign in, pick a model, install a tool), then opens to a Home screen, a Tools screen for installing or removing coding tools, and a Health screen that runs `codemie doctor`.
+Download `CodeMie-Connect-2.1.0-aarch64.dmg` from the [macOS install folder](https://github.com/codemie-ai/codemie-code/tree/main/install/macos), open it, and run the app. It runs a guided setup (sign in, pick a model, install a tool), then opens to a Home screen, a Tools screen for installing or removing coding tools, and a Health screen that runs `codemie doctor`.
 
 ### Log File
 
 App output is written to `~/Library/Logs/CodeMie/codemie_wizard.log`. The log persists across runs.
 
-The app checks this repo for updates: `install/manifest.json` holds the latest app version and the download link for each platform. This is independent of the `@codemieai/code` npm package version.
+The app checks this repo for updates: `install/manifest.json` holds the latest app version and its download link. This is independent of the `@codemieai/code` npm package version.
 
 ## Release Artifacts
 
