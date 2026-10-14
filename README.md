@@ -70,7 +70,7 @@ npx @codemieai/code install claude --supported
 
 For Windows and macOS, CodeMie ships two installer options:
 
-- **CodeMie Connect** — a signed desktop app for macOS (Apple Silicon) that sets up Node.js and the CodeMie CLI on first launch, so there is nothing to install first. It runs a guided setup (sign in, pick a model, install a tool) and then opens to a Home screen, a Tools screen for installing or removing coding tools, and a Health screen that runs `codemie doctor`. The Windows build is coming; until then, use the script installer below on Windows.
+- **CodeMie Connect** — a signed desktop app for macOS (Apple Silicon) that sets up Node.js and the CodeMie CLI on first launch, so there is nothing to install first. It runs a guided setup (sign in, pick a model, install a tool) and then opens to a Home screen, a Tools screen for installing or removing coding tools, and a Health screen that runs `codemie doctor`.
 
   [![Download for macOS](install/assets/download-macos.svg)](https://github.com/codemie-ai/codemie-code/raw/main/install/macos/CodeMie-Connect-2.1.0-aarch64.dmg)
 - **Script installers** — plain shell/PowerShell scripts stored in this repo that install via npm. Prefer these for CI, headless machines, or when CodeMie Connect is unavailable.

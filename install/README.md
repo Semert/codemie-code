@@ -2,7 +2,7 @@
 
 This directory contains source files for the CodeMie installers:
 
-- **CodeMie Connect** — a signed `.dmg` desktop app for macOS (Apple Silicon) that sets up Node.js and the CodeMie CLI on first launch, so there is nothing to install first. The Windows build is coming.
+- **CodeMie Connect** — a signed `.dmg` desktop app for macOS (Apple Silicon) that sets up Node.js and the CodeMie CLI on first launch, so there is nothing to install first.
 - **Script installers** — plain shell/PowerShell bootstrap scripts that install via npm. Prefer these for CI, headless machines, or when CodeMie Connect is unavailable.
 
 ## Distribution Models
@@ -113,10 +113,6 @@ Older installers set the npm `prefix` in the user `.npmrc` to `%LOCALAPPDATA%\Co
 npm config delete prefix --location user
 npm i -g @anthropic-ai/claude-code@latest   # repeat for each package listed in the old folder
 ```
-
-## Windows Installation
-
-The Windows build of CodeMie Connect is coming. Until then, use the Windows PowerShell or CMD script installer above.
 
 ## macOS Installation
 
