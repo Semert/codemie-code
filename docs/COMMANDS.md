@@ -370,14 +370,18 @@ All external agents share the same command pattern:
 # Basic usage
 codemie-claude "message"         # Claude Code agent
 codemie-claude-acp               # Claude Code ACP (invoked by IDEs)
+codemie-codex-acp                # Codex ACP (invoked by IDEs)
 codemie-gemini "message"         # Gemini CLI agent
+codemie-gemini-acp               # Gemini CLI ACP (invoked by IDEs)
+codemie-opencode-acp             # OpenCode ACP (invoked by IDEs)
 
 # Health checks
 codemie-claude health
 codemie-gemini health
 
-# Note: codemie-claude-acp doesn't have interactive mode or health check
-# It's designed to be invoked by IDEs via ACP protocol
+# Note: codemie-claude-acp, codemie-codex-acp, codemie-gemini-acp, and
+# codemie-opencode-acp don't have interactive mode or health check — they're
+# designed to be invoked by IDEs via ACP protocol
 
 # With configuration overrides
 codemie-claude --model claude-sonnet-4-6 --api-key sk-... "review code"
@@ -1164,8 +1168,11 @@ codemie install <agent>
 **Supported Agents:**
 - `claude` - Claude Code (npm-based)
 - `claude-acp` - Claude Code ACP adapter for IDE integration (npm-based)
+- `codex-acp` - Codex ACP adapter for IDE integration (npm-based)
 - `gemini` - Gemini CLI (npm-based)
+- `gemini-acp` - Gemini CLI ACP mode for IDE integration (same `gemini` install)
 - `opencode` - OpenCode AI assistant (npm-based)
+- `opencode-acp` - OpenCode ACP mode for IDE integration (same `opencode` install)
 
 ### `codemie uninstall [agent]`
 
@@ -1578,3 +1585,22 @@ codemie version
 - CLI version
 - Node.js version
 - Package name and description
+
+### Claude Code OTLP analytics
+
+`codemie proxy connect --claude-code-otlp` writes the hooks and OTel environment variables into the user-level `~/.claude/settings.json`, plus `CODEMIE_ANALYTICS_PROJECT_FILTER`: a JSON array (stored as a string) of absolute project paths that are tracked.
+
+| Command                                               | Allowlist result                                                                         |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `connect --claude-code-otlp` (default `--scope user`) | `[]` - every project is tracked (resets any existing list)                               |
+| `connect --claude-code-otlp --scope project`          | adds the current project root (deduplicated); run it in each project to track            |
+| `disconnect --claude-code-otlp --scope project`       | removes the current project root; when the list becomes empty everything is disconnected |
+| `disconnect --claude-code-otlp`                       | removes hooks, OTel variables and the allowlist                                          |
+
+A `cwd` inside any listed path is tracked (nested directories included). An invalid value stops `connect` before anything is written; fix it manually or rerun with `--force` to discard it. `--force` never edits a valid list.
+
+**How the filter works.** Only the hook process reads the allowlist. For an untracked project the hook does nothing: no proxy start, no SSO check, nothing forwarded. The daemon has no allowlist logic; its completeness gate (`otlp-spool/completeness-gate.ts`) only sends sessions that have hooks data, and never sends OTEL-only sessions. The decision is per hook event, so a tracked session that moves fully outside the project loses hook events from that stretch, and a session that starts outside and later enters a tracked project becomes sendable from then on.
+
+**Privacy note.** The OTel environment is global, so every Claude Code session, including untracked projects, exports telemetry (with tool details) to the local daemon whenever it runs. That data stays on disk: it is skipped after the send wait limit (`OTLP_SEND_MAX_ATTEMPTS` ticks) and deleted by the sweeper after the abandoned grace period (`OTLP_ABANDONED_SESSION_GRACE_MINUTES`). Nothing from untracked projects is sent to the backend.
+
+Allowlist changes apply immediately; the first-time setup needs a Claude Code restart.

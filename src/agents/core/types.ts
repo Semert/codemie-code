@@ -726,10 +726,22 @@ export interface ResumeOwnershipResult {
   auditData?: Record<string, unknown>;
 }
 
+export enum AgentAdapterType {
+  BASE,
+  OTLP,
+}
+
+export interface OtlpAdapterDeps {
+  ensureOtlpProxy: (agentName: string) => Promise<void>;
+  /** Sends one hook invocation's events as a single batch; true only for a 2xx response. */
+  forwardOtlpEventsToSpool: (events: Record<string, unknown>[], agentName: string) => Promise<boolean>;
+}
+
 /**
  * Agent adapter interface - implemented by BaseAgentAdapter
  */
 export interface AgentAdapter {
+  readonly type: AgentAdapterType.BASE;
   name: string;
   displayName: string;
   description: string;

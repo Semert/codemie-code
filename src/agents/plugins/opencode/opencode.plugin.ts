@@ -75,6 +75,13 @@ function buildMergedHooks(env: NodeJS.ProcessEnv): Record<string, unknown[]> {
 /**
  * Build a hook config object from environment variables.
  * Used by both onSessionStart and onSessionEnd lifecycle hooks.
+ *
+ * clientType reads env.CODEMIE_CLIENT_TYPE (set by BaseAgentAdapter from
+ * metadata.ssoConfig.clientType for every agent) rather than the fixed
+ * OPENCODE_CLIENT_TYPE constant, so that plugins extending OpenCodePlugin with
+ * a different clientType (e.g. opencode-acp's 'codemie-opencode-acp') are
+ * tagged correctly in telemetry. Falls back to OPENCODE_CLIENT_TYPE to
+ * preserve behavior for plain OpenCode / any caller that doesn't set the env var.
  */
 function buildHookConfig(env: NodeJS.ProcessEnv, sessionId: string): HookProcessingConfig {
   return {
@@ -87,7 +94,7 @@ function buildHookConfig(env: NodeJS.ProcessEnv, sessionId: string): HookProcess
     profileName: env.CODEMIE_PROFILE_NAME,
     project: env.CODEMIE_PROJECT,
     model: env.CODEMIE_MODEL,
-    clientType: OPENCODE_CLIENT_TYPE,
+    clientType: env.CODEMIE_CLIENT_TYPE || OPENCODE_CLIENT_TYPE,
   };
 }
 
@@ -232,7 +239,7 @@ export const OpenCodePluginMetadata: AgentMetadata = {
           sessionId,
           apiBaseUrl: env.CODEMIE_SYNC_API_URL || env.CODEMIE_BASE_URL || '',
           cookies: '',
-          clientType: OPENCODE_CLIENT_TYPE,
+          clientType: env.CODEMIE_CLIENT_TYPE || OPENCODE_CLIENT_TYPE,
           version: env.CODEMIE_CLI_VERSION || '0.0.0',
           dryRun: false,
           gitBranch: env.CODEMIE_GIT_BRANCH,
@@ -285,17 +292,19 @@ export const OpenCodePluginMetadata: AgentMetadata = {
         return env;
       }
 
+      // Model selection priority: env var > config > default
+      const selectedModel = env.CODEMIE_MODEL || config?.model || 'gpt-5-2-2025-12-11';
+
       // Fetch live model catalogue from the CodeMie API.
       // Falls back to the static OPENCODE_MODEL_CONFIGS on any error.
       const allModels = await fetchDynamicModelConfigs(
         baseUrl,
         env.CODEMIE_URL,
         env.CODEMIE_JWT_TOKEN,
+        selectedModel,
       );
 
-      // Model selection priority: env var > config > default
       // Use dynamic catalogue first, then fall back to static getModelConfig for unknown IDs.
-      const selectedModel = env.CODEMIE_MODEL || config?.model || 'gpt-5-2-2025-12-11';
       const modelConfig = allModels[selectedModel] ?? getModelConfig(selectedModel);
 
       const { providerOptions } = modelConfig;
@@ -347,7 +356,9 @@ export const OpenCodePluginMetadata: AgentMetadata = {
           // Built-in openai CUSTOM_LOADER: routes Responses API models via sdk.responses()
           ...(proxyBaseUrl && hasResponsesApiModels && {
             openai: {
-              name: 'CodeMie SSO',
+              // OpenCode orders provider groups by name; a distinct, longer name keeps this group below
+              // the 'CodeMie SSO' group that holds the routers (equal names left the order arbitrary).
+              name: 'CodeMie SSO (Responses API)',
               // whitelist: suppress the built-in openai model list (GPT-4, GPT-4o, etc.)
               // OpenCode merges user models with models.dev — whitelist restricts to ours only
               whitelist: Object.keys(responsesApiModels),
