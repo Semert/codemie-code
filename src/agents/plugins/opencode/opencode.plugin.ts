@@ -75,6 +75,13 @@ function buildMergedHooks(env: NodeJS.ProcessEnv): Record<string, unknown[]> {
 /**
  * Build a hook config object from environment variables.
  * Used by both onSessionStart and onSessionEnd lifecycle hooks.
+ *
+ * clientType reads env.CODEMIE_CLIENT_TYPE (set by BaseAgentAdapter from
+ * metadata.ssoConfig.clientType for every agent) rather than the fixed
+ * OPENCODE_CLIENT_TYPE constant, so that plugins extending OpenCodePlugin with
+ * a different clientType (e.g. opencode-acp's 'codemie-opencode-acp') are
+ * tagged correctly in telemetry. Falls back to OPENCODE_CLIENT_TYPE to
+ * preserve behavior for plain OpenCode / any caller that doesn't set the env var.
  */
 function buildHookConfig(env: NodeJS.ProcessEnv, sessionId: string): HookProcessingConfig {
   return {
@@ -83,11 +90,12 @@ function buildHookConfig(env: NodeJS.ProcessEnv, sessionId: string): HookProcess
     provider: env.CODEMIE_PROVIDER,
     apiBaseUrl: env.CODEMIE_BASE_URL,
     ssoUrl: env.CODEMIE_URL,
+    env,
     version: env.CODEMIE_CLI_VERSION,
     profileName: env.CODEMIE_PROFILE_NAME,
     project: env.CODEMIE_PROJECT,
     model: env.CODEMIE_MODEL,
-    clientType: OPENCODE_CLIENT_TYPE,
+    clientType: env.CODEMIE_CLIENT_TYPE || OPENCODE_CLIENT_TYPE,
   };
 }
 
@@ -232,12 +240,13 @@ export const OpenCodePluginMetadata: AgentMetadata = {
           sessionId,
           apiBaseUrl: env.CODEMIE_SYNC_API_URL || env.CODEMIE_BASE_URL || '',
           cookies: '',
-          clientType: OPENCODE_CLIENT_TYPE,
+          clientType: env.CODEMIE_CLIENT_TYPE || OPENCODE_CLIENT_TYPE,
           version: env.CODEMIE_CLI_VERSION || '0.0.0',
           dryRun: false,
           gitBranch: env.CODEMIE_GIT_BRANCH,
         }),
         ssoUrl: env.CODEMIE_URL,
+        env,
         syncApiUrl: env.CODEMIE_SYNC_API_URL || env.CODEMIE_BASE_URL,
         cliVersion: env.CODEMIE_CLI_VERSION,
       });
@@ -290,12 +299,7 @@ export const OpenCodePluginMetadata: AgentMetadata = {
 
       // Fetch live model catalogue from the CodeMie API.
       // Falls back to the static OPENCODE_MODEL_CONFIGS on any error.
-      const allModels = await fetchDynamicModelConfigs(
-        baseUrl,
-        env.CODEMIE_URL,
-        env.CODEMIE_JWT_TOKEN,
-        selectedModel,
-      );
+      const allModels = await fetchDynamicModelConfigs(baseUrl, env, selectedModel);
 
       // Use dynamic catalogue first, then fall back to static getModelConfig for unknown IDs.
       const modelConfig = allModels[selectedModel] ?? getModelConfig(selectedModel);

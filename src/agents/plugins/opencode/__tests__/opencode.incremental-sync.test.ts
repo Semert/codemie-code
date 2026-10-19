@@ -10,7 +10,7 @@
  * Mirrors codex.incremental-sync.test.ts for the discover -> match cwd -> process ->
  * upload contract; pins the current behaviour as a regression baseline.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../../../utils/logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), success: vi.fn() },
@@ -96,6 +96,12 @@ function matchingDescriptor(overrides: Record<string, unknown> = {}): Record<str
 }
 
 describe('opencode.incremental-sync', () => {
+  beforeAll(async () => {
+    // The upload path lazily imports the credential helper; load it once up front so
+    // the fake-timer ticks below don't have to wait for real module I/O.
+    await import('../../../../providers/core/codemie-auth-helpers.js');
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     discoverSessions.mockReset();
@@ -337,6 +343,41 @@ describe('opencode.incremental-sync', () => {
           dryRun: false,
           sessionId: currentSessionId,
         })
+      );
+    });
+
+    it('uploads with the clientType returned by buildContext() (e.g. codemie-opencode-acp)', async () => {
+      // Regression guard: the upload context used to hardcode 'codemie-opencode'
+      // regardless of what buildContext() returned, so opencode-acp sessions
+      // were mistagged in the upload path even though onSessionStart's
+      // buildContext() already carried the correct clientType.
+      process.env.CODEMIE_OPENCODE_SYNC_INTERVAL_MS = '5000';
+      discoverSessions.mockResolvedValue([matchingDescriptor()]);
+      processSession.mockResolvedValue({ success: true, processors: {}, totalRecords: 1, failedProcessors: [] });
+      mockGetStoredCredentials.mockResolvedValue({ cookies: { session: 'abc123' } });
+      mockSync.mockResolvedValue({ success: true, message: 'ok' });
+
+      const { startOpenCodeIncrementalSync } = await import('../opencode.incremental-sync.js');
+      startOpenCodeIncrementalSync({
+        ...commonOptions(),
+        buildContext: () =>
+          ({
+            sessionId: currentSessionId,
+            apiBaseUrl: '',
+            cookies: '',
+            clientType: 'codemie-opencode-acp',
+            version: '0.1.0',
+            dryRun: false,
+          }) as never,
+        ssoUrl: 'https://codemie.example.com',
+        syncApiUrl: 'https://sync.example.com',
+        cliVersion: '1.2.3',
+      } as never);
+
+      await runTicks(5000, 1);
+      expect(mockSync).toHaveBeenCalledWith(
+        currentSessionId,
+        expect.objectContaining({ clientType: 'codemie-opencode-acp' })
       );
     });
 

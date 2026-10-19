@@ -18,15 +18,30 @@
  * @group unit
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { LlmModel } from '../../../../providers/plugins/sso/sso.http-client.js';
 
 vi.mock('../../../../utils/pricing.js', () => ({
   lookupPrice: vi.fn(),
 }));
 
+const fetchMock = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
+vi.mock('../../../../providers/plugins/sso/sso.http-client.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../providers/plugins/sso/sso.http-client.js')>();
+  return { ...actual, fetchCodeMieLlmModels: fetchMock };
+});
+const ssoMock = vi.hoisted(() => ({ getStoredCredentials: vi.fn() }));
+vi.mock('../../../../providers/plugins/sso/sso.auth.js', () => ({
+  CodeMieSSO: class {
+    getStoredCredentials = (...args: unknown[]) => ssoMock.getStoredCredentials(...args);
+  },
+}));
+
 import { lookupPrice } from '../../../../utils/pricing.js';
-import { convertLlmModelToPiEntry } from '../pi.models.js';
+import { convertLlmModelToPiEntry, fetchAndBuildPiModels } from '../pi.models.js';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 /** What `lookupPrice` returns for a Claude model: already USD per million, with a 1h write rate Pi has no field for. */
 const VENDORED_CLAUDE = {
@@ -251,5 +266,76 @@ describe('convertLlmModelToPiEntry — cost', () => {
     expect(entry.input).toEqual(['text', 'image']);
     expect(entry.reasoning).toBe(true);
     expect(entry.compat).toEqual({ forceAdaptiveThinking: true });
+  });
+});
+
+describe('convertLlmModelToPiEntry — GPT-6 limits and routing', () => {
+  beforeEach(() => {
+    vi.mocked(lookupPrice).mockReset();
+    vi.mocked(lookupPrice).mockReturnValue(null);
+  });
+
+  function gpt6Model(id: string): LlmModel {
+    return llmModel({ base_name: id, deployment_name: id, label: id });
+  }
+
+  it('should report a 1050000-token window for gpt-6-luna', () => {
+    const entry = convertLlmModelToPiEntry(gpt6Model('gpt-6-luna'));
+
+    expect(entry.contextWindow).toBe(1050000);
+    expect(entry.maxTokens).toBe(128000);
+  });
+
+  it('should report a 1050000-token window for a vendor-prefixed id', () => {
+    const entry = convertLlmModelToPiEntry(gpt6Model('openai.gpt-6-sol'));
+
+    expect(entry.contextWindow).toBe(1050000);
+    expect(entry.maxTokens).toBe(128000);
+  });
+
+  it('should route gpt-6-luna via openai-responses with reasoning', () => {
+    const entry = convertLlmModelToPiEntry(gpt6Model('gpt-6-luna'));
+
+    expect(entry.api).toBe('openai-responses');
+    expect(entry.reasoning).toBe(true);
+  });
+});
+
+describe('fetchAndBuildPiModels SSO lookup (profile baseUrl first)', () => {
+  const creds = { cookies: { s: '1' }, apiUrl: 'https://api.sso.example/code-assistant-api' };
+  const profile = JSON.stringify({ provider: 'ai-run-sso', baseUrl: 'https://profile.example.com' });
+  let cwd: string;
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    ssoMock.getStoredCredentials.mockReset();
+    vi.mocked(lookupPrice).mockReturnValue(undefined as never);
+    cwd = mkdtempSync(join(tmpdir(), 'pi-models-'));
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('fetches the catalog for a baseUrl-only profile with CODEMIE_URL unset', async () => {
+    ssoMock.getStoredCredentials.mockResolvedValue(creds);
+    fetchMock.mockResolvedValue([llmModel()]);
+
+    await fetchAndBuildPiModels({ CODEMIE_PROFILE_CONFIG: profile }, cwd);
+
+    expect(ssoMock.getStoredCredentials).toHaveBeenCalledWith('https://profile.example.com');
+    expect(fetchMock).toHaveBeenCalledWith(creds.apiUrl, creds.cookies);
+  });
+
+  it('ignores the proxy-rewritten CODEMIE_BASE_URL', async () => {
+    ssoMock.getStoredCredentials.mockResolvedValue(creds);
+    fetchMock.mockResolvedValue([llmModel()]);
+
+    await fetchAndBuildPiModels(
+      { CODEMIE_PROFILE_CONFIG: profile, CODEMIE_BASE_URL: 'http://localhost:4321' },
+      cwd,
+    );
+
+    expect(ssoMock.getStoredCredentials).toHaveBeenCalledWith('https://profile.example.com');
   });
 });

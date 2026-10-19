@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'fs/promises';
 import type { LlmModel } from '../../../providers/plugins/sso/sso.http-client.js';
 import { fetchCodeMieLlmModels } from '../../../providers/plugins/sso/sso.http-client.js';
-import { CodeMieSSO } from '../../../providers/plugins/sso/sso.auth.js';
+import { getPlatformUrlFromEnv, getStoredPlatformCredentialsFromEnv } from '../../../providers/core/codemie-auth-helpers.js';
 import { logger } from '../../../utils/logger.js';
 import type { ModelPrice } from '../../../utils/pricing.js';
 import { lookupPrice } from '../../../utils/pricing.js';
@@ -24,6 +24,9 @@ const RESPONSES_API_PATTERNS: RegExp[] = [
   /^gpt-5\.5-/,
   /^gpt-5-5-/,
   /gpt-5[.-]6/,
+  // gpt-6-*/gpt-6.* (e.g. gpt-6-luna, gpt-6.1-sol, openai.gpt-6-luna, bare openai.gpt-6).
+  // (?!\d) keeps gpt-60-style ids out while staying ready for 6.2+.
+  /gpt-6(?!\d)/,
 ];
 
 export function classifyPiModel(modelId: string): PiModelClassification {
@@ -69,6 +72,7 @@ function detectLimits(id: string): { contextWindow: number; maxTokens: number } 
   if (id.startsWith('gpt-4.1')) return { contextWindow: 1048576, maxTokens: 32768 };
   if (/^gpt-5\.5-/.test(id) || /^gpt-5-5-/.test(id)) return { contextWindow: 1050000, maxTokens: 128000 };
   if (/gpt-5[.-]6/.test(id)) return { contextWindow: 1050000, maxTokens: 128000 };
+  if (/gpt-6(?!\d)/.test(id)) return { contextWindow: 1050000, maxTokens: 128000 };
   if (id.startsWith('gpt-5')) return { contextWindow: 400000, maxTokens: 128000 };
   if (/^o[134]-/.test(id) || id === 'o1') return { contextWindow: 200000, maxTokens: 100000 };
   if (id.startsWith('qwen') || id.startsWith('moonshotai') || id.startsWith('kimi')) {
@@ -96,6 +100,7 @@ function isReasoningModel(id: string): boolean {
     id.startsWith('gemini') ||
     id.startsWith('gpt-5') ||
     /gpt-5[.-]6/.test(id) ||
+    /gpt-6(?!\d)/.test(id) ||
     /^o[134]-/.test(id) ||
     id === 'o1' ||
     id.startsWith('deepseek') ||
@@ -255,15 +260,14 @@ async function fetchCodeMieModels(env: NodeJS.ProcessEnv): Promise<LlmModel[]> {
     return fetchCodeMieLlmModels(baseUrl, jwtToken);
   }
 
-  const codeMieUrl = env.CODEMIE_URL;
-  if (codeMieUrl) {
-    const sso = new CodeMieSSO();
-    const credentials = await sso.getStoredCredentials(codeMieUrl);
-    if (!credentials) {
-      throw new Error(`SSO credentials not found for ${codeMieUrl}. Run: codemie profile login --url ${codeMieUrl}`);
+  const platformUrl = getPlatformUrlFromEnv(env);
+  if (platformUrl) {
+    const found = await getStoredPlatformCredentialsFromEnv(env);
+    if (!found) {
+      throw new Error(`SSO credentials not found for ${platformUrl}. Run: codemie profile login --url ${platformUrl}`);
     }
     logger.debug('[pi-models] Fetching CodeMie model list via SSO auth');
-    return fetchCodeMieLlmModels(credentials.apiUrl, credentials.cookies);
+    return fetchCodeMieLlmModels(found.credentials.apiUrl, found.credentials.cookies);
   }
 
   throw new Error('No CodeMie authentication available. Run codemie setup or set CODEMIE_JWT_TOKEN.');

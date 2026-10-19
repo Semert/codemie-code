@@ -66,12 +66,28 @@ npx @codemieai/code install claude --supported
 
 ## Installation
 
+### System Requirements
+
+Before installing, verify the following:
+
+| Requirement | Details |
+|---|---|
+| Node.js | `>=20.0.0` |
+| npm | Required for the npm fallback and local/project installation methods; ships with Node.js |
+| Operating System | Windows, macOS, Linux, or WSL |
+| Network access | Access to `registry.npmjs.org` (or an enterprise npm mirror that exposes the `@codemieai` scope) **and** to GitHub Releases (`github.com`, `objects.githubusercontent.com`) — some native dependencies (e.g. `keytar`) fetch prebuilt binaries from there via `prebuild-install` |
+| npm permissions | A user-writable global npm prefix is recommended for `npm install -g`; when global npm is not writable, the bootstrap installers configure a user-local prefix automatically |
+
+Confirm the installed Node.js version with `node --version` before proceeding. Agent shortcuts (`codemie-claude`, `codemie-codex`, `codemie-opencode`, `codemie-pi`, `codemie-kimi`, etc.) additionally require a **global** installation — see [Local/Project npm Installation](#localproject-npm-installation).
+
 ### Native Bootstrap Installers
 
 For Windows and macOS, CodeMie ships two installer options:
 
-- **GUI installers** — a signed `.dmg` (macOS) and a `.exe` wizard (Windows) that guide you through installation with no terminal required. Download [CodeMie Connect 2.0.1 (macOS aarch64)](https://github.com/codemie-ai/codemie-code/raw/main/install/macos/CodeMie%20Connect_2.0.1_aarch64_signed.dmg) or browse the [macOS install folder](https://github.com/codemie-ai/codemie-code/tree/main/install/macos) / [Windows install folder](https://github.com/codemie-ai/codemie-code/tree/main/install/windows) and run the file.
-- **Script installers** — plain shell/PowerShell scripts stored in this repo that install via npm. Prefer these for CI, headless machines, or when the GUI installer is unavailable.
+- **CodeMie Connect** — a signed desktop app for macOS (Apple Silicon) that sets up Node.js and the CodeMie CLI on first launch, so there is nothing to install first. It runs a guided setup (sign in, pick a model, install a tool) and then opens to a Home screen, a Tools screen for installing or removing coding tools, and a Health screen that runs `codemie doctor`.
+
+  [![Download for macOS](install/assets/download-macos.svg)](https://github.com/codemie-ai/codemie-connect/releases/download/v2.1.0/CodeMie-Connect-2.1.0-aarch64.dmg)
+- **Script installers** — plain shell/PowerShell scripts stored in this repo that install via npm. Prefer these for CI, headless machines, or when CodeMie Connect is unavailable.
 
 The script installers are plain scripts stored in this public GitHub repo, so they do not require a Windows-built `.exe` or a private Artifactory mirror.
 
@@ -206,10 +222,13 @@ CodeMie installs external agents, routes them through the CodeMie proxy, and tra
 | Agent | Install | Shortcut | Upstream package |
 |---|---|---|---|
 | Claude Code | `codemie install claude --supported` | `codemie-claude` | `@anthropic-ai/claude-code` |
-| Claude Code ACP | `codemie install claude-acp` | `codemie-claude-acp` | `@zed-industries/claude-code-acp` |
+| Claude Code ACP | `codemie install claude-acp` | `codemie-claude-acp` | `@agentclientprotocol/claude-agent-acp` |
 | OpenAI Codex | `codemie install codex --supported` | `codemie-codex` | `@openai/codex` |
+| Codex ACP | `codemie install codex-acp` | `codemie-codex-acp` | `@agentclientprotocol/codex-acp` |
 | Gemini CLI | `codemie install gemini` | `codemie-gemini` | `@google/gemini-cli` |
+| Gemini CLI ACP | `codemie install gemini-acp` | `codemie-gemini-acp` | `@google/gemini-cli` (`--acp` mode) |
 | OpenCode | `codemie install opencode` | `codemie-opencode` | `opencode-ai` |
+| OpenCode ACP | `codemie install opencode-acp` | `codemie-opencode-acp` | `opencode-ai` (`acp` mode) |
 | Pi | `codemie install pi` | `codemie-pi` | `@earendil-works/pi-coding-agent` |
 | Kimi Code | `codemie install kimi` | `codemie-kimi` | `@moonshot-ai/kimi-code` |
 | Kimi Code ACP | `codemie install kimi-acp` | `codemie-kimi-acp` | `@moonshot-ai/kimi-code` (`acp` mode) |
@@ -272,12 +291,26 @@ Requirements and behavior:
 
 #### ACP Agent usage in IDEs and Editors
 
+Four agents ship an ACP (Agent Client Protocol) variant: `claude-acp`, `codex-acp`, `gemini-acp`, `opencode-acp`. Each is launched by the IDE via its own `codemie-<agent>-acp` shortcut — install with `codemie install <agent>-acp`, then point your editor at the matching command below.
+
 **Zed** (`~/.config/zed/settings.json`):
 ```json
 {
   "agent_servers": {
     "claude": {
       "command": "codemie-claude-acp",
+      "args": ["--profile", "work"]
+    },
+    "codex": {
+      "command": "codemie-codex-acp",
+      "args": ["--profile", "work"]
+    },
+    "gemini": {
+      "command": "codemie-gemini-acp",
+      "args": ["--profile", "work"]
+    },
+    "opencode": {
+      "command": "codemie-opencode-acp",
       "args": ["--profile", "work"]
     }
   }
@@ -291,6 +324,35 @@ Requirements and behavior:
   "agent_servers": {
     "Claude Code via CodeMie": {
       "command": "codemie-claude-acp"
+    },
+    "Codex via CodeMie": {
+      "command": "codemie-codex-acp"
+    },
+    "Gemini CLI via CodeMie": {
+      "command": "codemie-gemini-acp"
+    },
+    "OpenCode via CodeMie": {
+      "command": "codemie-opencode-acp"
+    }
+  }
+}
+```
+
+**JetBrains AIR** (`~/Library/Application Support/JetBrains/Air/acp.json` on macOS):
+```json
+{
+  "agent_servers": {
+    "Claude Code via CodeMie": {
+      "command": "codemie-claude-acp"
+    },
+    "Codex via CodeMie": {
+      "command": "codemie-codex-acp"
+    },
+    "Gemini CLI via CodeMie": {
+      "command": "codemie-gemini-acp"
+    },
+    "OpenCode via CodeMie": {
+      "command": "codemie-opencode-acp"
     }
   }
 }
@@ -301,6 +363,7 @@ Requirements and behavior:
 (setq acp-claude-command "codemie-claude-acp")
 (setq acp-claude-args '("--profile" "work"))
 ```
+Other agents follow the same pattern — swap in `acp-codex-command`, `acp-gemini-command`, or `acp-opencode-command` with the matching `codemie-<agent>-acp` command, per your acp.el agent configuration.
 
 
 **Version Management:**
@@ -523,6 +586,22 @@ codemie proxy <cmd>      # Manage the local CodeMie proxy and its integrations
 codemie codebase ui      # Start and open Codebase Memory graph UI
 codemie doctor           # Health check and diagnostics
 ```
+
+### Analytics for a separate Claude Code profile
+
+If a command such as `claude-work` stores sessions in a separate config directory,
+pass that same directory to analytics:
+
+```bash
+CLAUDE_CONFIG_DIR="$HOME/.claude-work" codemie analytics --include-external --last 7d
+```
+
+Claude session discovery reads `<CLAUDE_CONFIG_DIR>/projects`. When the variable is unset
+or empty, it uses `~/.claude/projects`. The selected directory replaces the default for
+native Claude discovery; other Claude profile directories are not scanned automatically.
+Existing CodeMie-tracked sessions and other agents are still included as usual.
+Use an absolute path for scheduled jobs and set the variable in the job's environment;
+an alias or function in your interactive shell does not configure the scheduler.
 
 For a full command reference, see the [Commands Documentation](docs/COMMANDS.md).
 

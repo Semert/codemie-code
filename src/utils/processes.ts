@@ -107,6 +107,16 @@ export interface DetachedSpawnOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   stdio?: 'ignore' | 'inherit';
+  windowsHide?: boolean;
+}
+
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function spawnDetached(
@@ -119,6 +129,12 @@ export function spawnDetached(
     env: options.env,
     detached: true,
     stdio: options.stdio ?? 'ignore',
+    windowsHide: options.windowsHide,
+  });
+  // A failed spawn emits 'error' on the next tick; unhandled, it crashes the process.
+  // The caller learns of the failure from the missing pid (-1).
+  child.on('error', (error) => {
+    logger.debug(`[spawnDetached] Failed to spawn ${command}:`, error);
   });
   child.unref();
   return child.pid ?? -1;
@@ -402,7 +418,7 @@ export async function detectGitRemoteRepo(cwd: string): Promise<string | undefin
   try {
     const { stdout } = await execAsync('git remote get-url origin', { cwd, timeout: 5000, windowsHide: true });
     const remoteUrl = stdout.trim();
-    const match = remoteUrl.match(/[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/);
+    const match = remoteUrl.match(/[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
     if (match) return `${match[1]}/${match[2]}`;
     return undefined;
   } catch {

@@ -6,7 +6,9 @@ import { SESSION_ORIGIN, SESSION_ORIGIN_ENV_KEY } from '@/agents/core/session/ty
 import type { BaseHookEvent, HookTransformer, MCPConfigSummary, ExtensionsScanSummary } from '@/agents/core/types.js';
 import type { ProcessingContext } from '@/agents/core/session/BaseProcessor.js';
 import { ensureOtlpProxy } from './proxy/connect-orchestrator.js';
+import { forwardOtlpEventsToSpool } from '@/agents/plugins/utils.js';
 import { ensureCodeMieSsoAuth, type AuthGateInput } from '@/providers/plugins/sso/sso.auth-gate.js';
+import { describeLogin } from '@/providers/plugins/sso/sso.detached-login.js';
 
 /**
  * Hook event handlers for agent lifecycle events
@@ -75,6 +77,12 @@ export interface HookProcessingConfig {
   ssoUrl?: string;
   /** Optional dedicated CodeMie API URL for analytics sync */
   syncApiUrl?: string;
+  /**
+   * Environment carrying CODEMIE_PROFILE_CONFIG (the active profile URL) for
+   * credential lookup; defaults to process.env. In-process callers pass the
+   * agent env, which the main process does not inherit.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -455,9 +463,10 @@ async function buildProcessingContext(
   // such as anthropic-subscription, where CodeMie auth is analytics-only.
   if (ssoUrl && apiUrl && !cookies) {
     try {
-      const { CodeMieSSO } = await import('../../providers/plugins/sso/sso.auth.js');
-      const sso = new CodeMieSSO();
-      const credentials = await sso.getStoredCredentials(ssoUrl);
+      const { getStoredAnalyticsCredentials } = await import('../../providers/core/codemie-auth-helpers.js');
+      const credentials = (await getStoredAnalyticsCredentials(ssoUrl, config?.env, {
+        provider: getConfigValue('CODEMIE_PROVIDER', config),
+      }))?.credentials;
 
       if (credentials?.cookies) {
         cookies = Object.entries(credentials.cookies)
@@ -560,6 +569,7 @@ async function enforceAnalyticsAuthGate(config?: HookProcessingConfig): Promise<
       ssoUrl,
       syncApiUrl,
       apiKey: getConfigValue('CODEMIE_API_KEY', config),
+      env: config?.env,
     };
 
     const authResult = await ensureCodeMieSsoAuth(authInput);
@@ -570,8 +580,7 @@ async function enforceAnalyticsAuthGate(config?: HookProcessingConfig): Promise<
     const message = [
       'CodeMie analytics authentication is invalid — session metrics are NOT being uploaded.',
       `Reason: ${authResult.reason}.`,
-      'A browser sign-in window has been opened automatically.',
-      'Complete the sign-in, then re-send your prompt.',
+      describeLogin(authResult.loginOutcome),
     ].join('\n');
 
     logger.warn(`[hook:UserPromptSubmit] Blocking prompt: ${authResult.reason}`);
@@ -994,9 +1003,10 @@ async function sendSessionStartMetrics(event: SessionStartEvent, sessionId: stri
     let cookieHeader = config?.cookies || '';
     if (!cookieHeader && ssoUrl) {
       try {
-        const { CodeMieSSO } = await import('../../providers/plugins/sso/sso.auth.js');
-        const sso = new CodeMieSSO();
-        const credentials = await sso.getStoredCredentials(ssoUrl);
+        const { getStoredAnalyticsCredentials } = await import('../../providers/core/codemie-auth-helpers.js');
+        const credentials = (await getStoredAnalyticsCredentials(ssoUrl, config?.env, {
+          provider: getConfigValue('CODEMIE_PROVIDER', config),
+        }))?.credentials;
 
         if (credentials?.cookies) {
           cookieHeader = Object.entries(credentials.cookies)
@@ -1252,9 +1262,10 @@ async function sendSessionEndMetrics(event: SessionEndEvent, sessionId: string, 
     let cookieHeader = config?.cookies || '';
     if (!cookieHeader && ssoUrl) {
       try {
-        const { CodeMieSSO } = await import('../../providers/plugins/sso/sso.auth.js');
-        const sso = new CodeMieSSO();
-        const credentials = await sso.getStoredCredentials(ssoUrl);
+        const { getStoredAnalyticsCredentials } = await import('../../providers/core/codemie-auth-helpers.js');
+        const credentials = (await getStoredAnalyticsCredentials(ssoUrl, config?.env, {
+          provider: getConfigValue('CODEMIE_PROVIDER', config),
+        }))?.credentials;
 
         if (credentials?.cookies) {
           cookieHeader = Object.entries(credentials.cookies)
@@ -1517,7 +1528,7 @@ export function createHookCommand(): Command {
 
         const analyticsAgent = AgentRegistry.getAnalyticsAgent(opts.agent!);
         if (analyticsAgent) {
-          await analyticsAgent.processOtlpEvent(input, { ensureOtlpProxy });
+          await analyticsAgent.processOtlpEvent(input, { ensureOtlpProxy, forwardOtlpEventsToSpool });
           await logger.close();
           process.exitCode = 0;
           return;

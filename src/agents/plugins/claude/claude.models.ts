@@ -1,6 +1,6 @@
 import type { LlmModel } from '../../../providers/plugins/sso/sso.http-client.js';
 import { fetchCodeMieLlmModels, buildModelLabelIndex, describeRouter, orderModelsForPicker } from '../../../providers/plugins/sso/sso.http-client.js';
-import { CodeMieSSO } from '../../../providers/plugins/sso/sso.auth.js';
+import { getPlatformUrlFromEnv, getStoredPlatformCredentialsFromEnv } from '../../../providers/core/codemie-auth-helpers.js';
 import { ConfigurationError } from '../../../utils/errors.js';
 import { logger } from '../../../utils/logger.js';
 
@@ -157,8 +157,8 @@ let cachedCatalog: { key: string; fetchedAt: number; models: LlmModel[] } | null
 async function fetchCatalog(env: NodeJS.ProcessEnv): Promise<LlmModel[]> {
   const jwtToken = env.CODEMIE_JWT_TOKEN;
   const baseUrl = env.CODEMIE_BASE_URL;
-  const codeMieUrl = env.CODEMIE_URL;
-  const cacheKey = jwtToken && baseUrl ? `jwt:${baseUrl}` : `sso:${codeMieUrl ?? ''}`;
+  const platformUrl = getPlatformUrlFromEnv(env);
+  const cacheKey = jwtToken && baseUrl ? `jwt:${baseUrl}` : `sso:${platformUrl ?? ''}`;
 
   if (
     cachedCatalog &&
@@ -172,16 +172,15 @@ async function fetchCatalog(env: NodeJS.ProcessEnv): Promise<LlmModel[]> {
   if (jwtToken && baseUrl) {
     logger.debug('[claude-models] Fetching CodeMie model list via JWT auth');
     models = await fetchCodeMieLlmModels(baseUrl, jwtToken);
-  } else if (codeMieUrl) {
-    const sso = new CodeMieSSO();
-    const credentials = await sso.getStoredCredentials(codeMieUrl);
-    if (!credentials) {
+  } else if (platformUrl) {
+    const found = await getStoredPlatformCredentialsFromEnv(env);
+    if (!found) {
       throw new ConfigurationError(
-        `SSO credentials not found for ${codeMieUrl}. Run: codemie setup or codemie profile login --url ${codeMieUrl}`
+        `SSO credentials not found for ${platformUrl}. Run: codemie setup or codemie profile login --url ${platformUrl}`
       );
     }
     logger.debug('[claude-models] Fetching CodeMie model list via SSO auth');
-    models = await fetchCodeMieLlmModels(credentials.apiUrl, credentials.cookies);
+    models = await fetchCodeMieLlmModels(found.credentials.apiUrl, found.credentials.cookies);
   } else {
     models = [];
   }
@@ -207,8 +206,9 @@ function stripOneMillionSuffix(id: string): string {
 /**
  * The one form a model id takes for Claude Code, decided by the catalog's own context window:
  * `<id>[1m]` when `maxInputTokens` reaches 1M, the bare id when it is smaller. A catalog that
- * reports no window (routers, static-config catalogs) decides nothing — the id is returned
- * untouched, so `[1m]` is neither guessed onto it nor stripped off it.
+ * reports no window (static-config catalogs, routers with an unknown tier) decides nothing — the
+ * id is returned untouched, so `[1m]` is neither guessed onto it nor stripped off it. A router's
+ * window is the minimum of its tiers' windows, computed by the backend.
  */
 function applyContextWindow(id: string, maxInputTokens: number | undefined): string {
   if (typeof maxInputTokens !== 'number') return id;
